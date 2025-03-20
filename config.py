@@ -22,16 +22,17 @@ FONT_PATHS = {
     "georgia_bold": "/usr/share/fonts/truetype/msttcorefonts/georgiab.ttf"
 }
 
+# 480px width layout: 140+100+70+70+70 = 450px + 30px padding
 REPORT_COLUMNS = [
-    ("Metric", 130),
-    ("Today", 90),
-    ("1D%", 65),
-    ("1M%", 65),
-    ("YTD%", 65)
+    ("Metric", 140),
+    ("Today", 100),
+    ("1D%", 70),
+    ("1M%", 70),
+    ("YTD%", 70)
 ]
 
 REQUIRED_KEYS = [
-    "JSEALSHARE", 
+    "JSEALSHARE",
     "USDZAR",
     "EURZAR",
     "GBPZAR",
