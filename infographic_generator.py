@@ -4,29 +4,48 @@ from config import *
 
 def generate_infographic(data):
     try:
-        # Load fonts
+        # Load Georgia fonts with fallback
         georgia = ImageFont.truetype(FONT_PATHS['georgia'], 18)
         georgia_bold = ImageFont.truetype(FONT_PATHS['georgia_bold'], 20)
+        footer_font = ImageFont.truetype(FONT_PATHS['georgia'], 16)
 
-        # Create 480px wide image
-        img = Image.new("RGB", (480, 550), THEME['background'])
+        # Create 520px wide canvas
+        img = Image.new("RGB", (520, 550), THEME['background'])
         draw = ImageDraw.Draw(img)
 
-        # Header
+        # Header Section
         header_text = f"Market Report {data['timestamp']}"
-        draw.text((20, 15), header_text, font=georgia_bold, fill=THEME['text'])
+        header_width = georgia_bold.getlength(header_text)
+        draw.text(
+            ( (520 - header_width) // 2, 15 ),  # Center-aligned
+            header_text,
+            font=georgia_bold,
+            fill=THEME['text']
+        )
 
-        # Table headers
-        y = 60
-        x = 20
-        for col, width in REPORT_COLUMNS:
-            draw.rectangle([x, y, x+width, y+30], fill=THEME['header'])
-            w = georgia_bold.getlength(col)
-            draw.text((x + (width - w)//2, y+5), col, font=georgia_bold, fill="white")
-            x += width
+        # Table Headers
+        y_position = 60
+        x_position = 25
+        for col_name, col_width in REPORT_COLUMNS:
+            # Header background
+            draw.rectangle(
+                [(x_position, y_position), 
+                 (x_position + col_width, y_position + 30)],
+                fill=THEME['header']
+            )
+            
+            # Header text (center-aligned)
+            text_width = georgia_bold.getlength(col_name)
+            draw.text(
+                (x_position + (col_width - text_width) // 2, y_position + 5),
+                col_name,
+                font=georgia_bold,
+                fill="white"
+            )
+            x_position += col_width
 
-        # Data rows
-        y = 90
+        # Data Rows
+        y_position = 90
         metrics = [
             ("JSE All Share", data["JSEALSHARE"]),
             ("USD/ZAR", data["USDZAR"]),
@@ -38,38 +57,69 @@ def generate_infographic(data):
             ("Bitcoin ZAR", data["BITCOINZAR"])
         ]
 
-        for name, values in metrics:
-            x = 20
-            # Metric name
-            draw.text((x+5, y+5), name, font=georgia, fill=THEME['text'])
-            x += REPORT_COLUMNS[0][1]
+        for idx, (metric_name, values) in enumerate(metrics):
+            x_position = 25
+            bg_color = "#F5F5F5" if idx % 2 == 0 else THEME['background']
+            
+            # Row background
+            draw.rectangle(
+                [(25, y_position), (520 - 25, y_position + 34)],
+                fill=bg_color
+            )
 
-            # Values
-            for col in ["Today", "Change", "Monthly", "YTD"]:
-                value = values[col]
-                if col == "Today":
-                    text = f"{value:,.0f}" if value > 1000 else f"{value:,.2f}"
-                    color = THEME['text']
-                else:
-                    text = f"{value:+.1f}%"
-                    color = THEME['positive'] if value >=0 else THEME['negative']
+            # Metric Name
+            draw.text(
+                (x_position + 5, y_position + 5),
+                metric_name,
+                font=georgia,
+                fill=THEME['text']
+            )
+            x_position += REPORT_COLUMNS[0][1]  # Move to "Today" column
+
+            # Today's Value
+            today_val = values["Today"]
+            today_text = f"{today_val:,.0f}" if today_val > 1000 else f"{today_val:,.2f}"
+            draw.text(
+                (x_position + 5, y_position + 5),
+                today_text,
+                font=georgia,
+                fill=THEME['text']
+            )
+            x_position += REPORT_COLUMNS[1][1]
+
+            # Percentage Values
+            for period in ["Change", "Monthly", "YTD"]:
+                value = values[period]
+                color = THEME['positive'] if value >= 0 else THEME['negative']
+                text = f"{value:+.1f}%"
                 
-                w = georgia.getlength(text)
-                draw.text((x + (REPORT_COLUMNS[1][1] - w)//2, y+5), text, 
-                          font=georgia, fill=color)
-                x += REPORT_COLUMNS[1][1] if col == "Today" else REPORT_COLUMNS[2][1]
-            y += 34
+                # Center-align in column
+                text_width = georgia.getlength(text)
+                draw.text(
+                    (x_position + (REPORT_COLUMNS[2][1] - text_width) // 2, 
+                    y_position + 5
+                ),
+                    text,
+                    font=georgia,
+                    fill=color
+                )
+                x_position += REPORT_COLUMNS[2][1]
 
-        # Footer without timestamp
-        footer = "Data: Yahoo Finance, CoinGecko"
-        footer_font = ImageFont.truetype(FONT_PATHS['georgia'], 16)
-        footer_width = footer_font.getlength(footer)
-        draw.text((480 - footer_width - 15, 525), footer, 
-                 font=footer_font, fill="#666666")
+            y_position += 34
+
+        # Footer (bottom-right aligned)
+        footer_text = "Data: Yahoo Finance, CoinGecko"
+        footer_width = footer_font.getlength(footer_text)
+        draw.text(
+            (520 - footer_width - 15, 525),
+            footer_text,
+            font=footer_font,
+            fill="#666666"
+        )
 
         filename = f"Market_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.png"
         img.save(filename)
         return filename
 
     except Exception as e:
-        raise RuntimeError(f"Infographic failed: {str(e)}")
+        raise RuntimeError(f"Infographic generation failed: {str(e)}")
