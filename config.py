@@ -1,7 +1,7 @@
 import os
 
 # Email Configuration
-EMAIL_SENDER = "your-email@gmail.com"
+EMAIL_SENDER = "ypanchia@gmail.com"
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")  # From GitHub Secrets
 EMAIL_RECEIVER = "yeshiel@dailymaverick.co.za"
 SMTP_SERVER = "smtp.gmail.com"
