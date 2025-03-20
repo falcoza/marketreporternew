@@ -1,48 +1,95 @@
 from PIL import Image, ImageDraw, ImageFont
-import textwrap
+from datetime import datetime
+from config import THEME, FONT_PATHS, REPORT_COLUMNS
 
-def load_font(size, bold=False):
+def load_font(size=14, bold=False):
+    """Load Georgia font with fallback to default"""
     try:
-        font_type = "georgia_bold" if bold else "georgia"
-        return ImageFont.truetype(FONT_PATHS[font_type], size)
+        font_path = FONT_PATHS["georgia_bold"] if bold else FONT_PATHS["georgia"]
+        return ImageFont.truetype(font_path, size)
     except:
         return ImageFont.load_default()
 
-def draw_table(draw, y_start, headers, data):
-    row_height = 40
-    col_widths = [c[1] for c in REPORT_COLUMNS]
-    
-    # Draw headers
-    x = 50
-    for (header, width), col_w in zip(headers, col_widths):
-        draw.rectangle([(x, y_start), (x+col_w, y_start+40)], fill=THEME["header"])
-        draw.text((x+10, y_start+5), header, font=load_font(18, True), fill="white")
-        x += col_w
-    
-    # Draw rows
-    y = y_start + 40
-    for metric, values in data.items():
-        x = 50
-        for col in headers:
-            value = values[col[0].replace(" ", "")]
-            color = THEME["positive"] if value >=0 else THEME["negative"]
-            draw.text((x+10, y+5), f"{value:.2f}%", font=load_font(16), fill=color)
-            x += col[1]
-        y += row_height
+def format_percentage(value):
+    """Format percentage with sign and color"""
+    symbol = "+" if value >= 0 else ""
+    color = THEME["positive"] if value >= 0 else THEME["negative"]
+    return f"{symbol}{value:.2f}%", color
 
 def generate_infographic(data):
-    img = Image.new("RGB", (900, 1200), THEME["background"])
+    # Create image canvas
+    img = Image.new("RGB", (900, 1000), THEME["background"])
     draw = ImageDraw.Draw(img)
+    y_position = 40
+
+    # Load fonts
+    title_font = load_font(28, bold=True)
+    header_font = load_font(18, bold=True)
+    text_font = load_font(16)
+
+    # Draw title
+    title = f"Daily Market Report - {data['timestamp']}"
+    draw.text((50, 20), title, fill=THEME["text"], font=title_font)
+
+    # Table headers
+    headers = [col[0] for col in REPORT_COLUMNS]
+    col_widths = [col[1] for col in REPORT_COLUMNS]
     
-    # Title
-    title_font = load_font(28, True)
-    draw.text((50, 20), f"Daily Market Report - {data['timestamp']}", 
-             fill=THEME["text"], font=title_font)
+    # Draw header background
+    draw.rectangle([(50, 80), (850, 120)], fill=THEME["header"])
     
-    # Main table
-    draw_table(draw, 80, REPORT_COLUMNS, data)
-    
+    # Draw header text
+    x = 50
+    for header, width in zip(headers, col_widths):
+        draw.text((x + 10, 85), header, font=header_font, fill="white")
+        x += width
+
+    # Draw rows
+    y_position = 120
+    metrics = [
+        ("JSE All Share", data["JSE All Share"]),
+        ("Rand/Dollar", data["Rand/Dollar"]),
+        ("Rand/Euro", data["Rand/Euro"]),
+        ("Rand/GBP", data["Rand/GBP"]),
+        ("Brent ($/barrel)", data["Brent ($/barrel)"]),
+        ("Gold ($/oz)", data["Gold ($/oz)"]),
+        ("S&P500", data["S&P500"]),
+        ("Bitcoin (ZAR)", data["Bitcoin (ZAR)"])
+    ]
+
+    for idx, (metric_name, values) in enumerate(metrics):
+        # Alternate row colors
+        bg_color = "#F5F5F5" if idx % 2 == 0 else THEME["background"]
+        draw.rectangle([(50, y_position), (850, y_position + 40)], fill=bg_color)
+
+        x = 50
+        # Today's Value
+        draw.text((x + 10, y_position + 5), f"{values['Today']:,.2f}", 
+                font=text_font, fill=THEME["text"])
+        x += col_widths[0]
+
+        # Daily Change
+        pct_text, pct_color = format_percentage(values["Change"])
+        draw.text((x + 10, y_position + 5), pct_text, 
+                font=text_font, fill=pct_color)
+        x += col_widths[1]
+
+        # Monthly Change
+        pct_text, pct_color = format_percentage(values["Monthly"])
+        draw.text((x + 10, y_position + 5), pct_text, 
+                font=text_font, fill=pct_color)
+        x += col_widths[2]
+
+        # YTD Change
+        pct_text, pct_color = format_percentage(values["YTD"])
+        draw.text((x + 10, y_position + 5), pct_text, 
+                font=text_font, fill=pct_color)
+
+        y_position += 40
+
     # Save with timestamp
-    filename = f"Market_Report_{data['timestamp'].replace(':', '-')}.png"
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    filename = f"Market_Report_{timestamp}.png"
     img.save(filename)
+    
     return filename
