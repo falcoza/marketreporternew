@@ -2,16 +2,14 @@ name: Market Report Automation
 
 on:
   schedule:
-    # South Africa Time (UTC+2)
-    # 5:00 AM SAST = 03:00 UTC
-    # 5:00 PM SAST = 15:00 UTC
-    - cron: '0 3,15 * * 1-5'  # Mon-Fri at 3:00 and 15:00 UTC
+    # 5:00 AM SAST = 03:00 UTC | 5:00 PM SAST = 15:00 UTC
+    - cron: '0 3,15 * * 1-5'  # Mon-Fri at 03:00 & 15:00 UTC
 
-  # Enable manual triggering from GitHub UI
+  # Manual trigger from GitHub UI
   workflow_dispatch:
 
 jobs:
-  generate-market-report:
+  generate-report:
     runs-on: ubuntu-latest
     
     steps:
@@ -28,7 +26,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install yfinance pandas pycoingecko pillow
 
-    - name: Run report generator
+    - name: Generate and send report
       env:
         EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
       run: python main.py
