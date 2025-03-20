@@ -17,13 +17,11 @@ THEME = {
     "negative": "#FF0000"
 }
 
-# Font Configuration
 FONT_PATHS = {
     "georgia": "/usr/share/fonts/truetype/msttcorefonts/georgia.ttf",
     "georgia_bold": "/usr/share/fonts/truetype/msttcorefonts/georgiab.ttf"
 }
 
-# Report Layout
 REPORT_COLUMNS = [
     ("Metric", 130),
     ("Today", 90),
@@ -31,3 +29,20 @@ REPORT_COLUMNS = [
     ("1M%", 65),
     ("YTD%", 65)
 ]
+
+REQUIRED_KEYS = [
+    "JSEALSHARE", 
+    "USDZAR",
+    "EURZAR",
+    "GBPZAR",
+    "BRENT",
+    "GOLD",
+    "SP500",
+    "BITCOINZAR"
+]
+
+def validate_data(data):
+    missing = [key for key in REQUIRED_KEYS if key not in data]
+    if missing:
+        raise ValueError(f"Missing data keys: {', '.join(missing)}")
+    return True
