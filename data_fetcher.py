@@ -1,40 +1,37 @@
-from pycoingecko import CoinGeckoAPI
 import yfinance as yf
-from datetime import datetime
-from config import ASSETS
+from pycoingecko import CoinGeckoAPI
+from datetime import datetime, timedelta
+import pandas as pd
+
+def calculate_percentage(old, new):
+    return ((new - old) / old) * 100 if old != 0 else 0
+
+def fetch_historical_data(ticker, days=1):
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
+    data = yf.Ticker(ticker).history(start=start_date, end=end_date, interval="1d")
+    return data['Close'].iloc[0] if not data.empty else 0
 
 def fetch_market_data():
-    """Retrieve live market data from various sources"""
-    data = {"Date": datetime.now().strftime("%Y-%m-%d %H:%M")}
+    cg = CoinGeckoAPI()
+    now = datetime.now()
     
-    try:
-        # JSE All Share
-        jse = yf.Ticker(ASSETS["jse"])
-        data["JSE All Share"] = jse.history(period="1d")["Close"].iloc[-1]
-
-        # Forex Rates
-        forex_pairs = ["USDZAR=X", "EURZAR=X", "GBPZAR=X"]
-        data.update({
-            "Rand/Dollar": yf.Ticker(forex_pairs[0]).history(period="1d")["Close"].iloc[-1],
-            "Rand/Euro": yf.Ticker(forex_pairs[1]).history(period="1d")["Close"].iloc[-1],
-            "Rand/GBP": yf.Ticker(forex_pairs[2]).history(period="1d")["Close"].iloc[-1],
-        })
-
-        # Commodities
-        data.update({
-            "Brent ($/barrel)": yf.Ticker(ASSETS["commodities"][0]).history(period="1d")["Close"].iloc[-1],
-            "Gold ($/oz)": yf.Ticker(ASSETS["commodities"][1]).history(period="1d")["Close"].iloc[-1]
-        })
-
-        # S&P 500
-        data["S&P 500"] = yf.Ticker(ASSETS["sp500"]).history(period="1d")["Close"].iloc[-1]
-
-        # Bitcoin (CoinGecko)
-        cg = CoinGeckoAPI()
-        data["Bitcoin (ZAR)"] = cg.get_price(ids=ASSETS["crypto"], vs_currencies="zar")["bitcoin"]["zar"]
-
-        return data
-
-    except Exception as e:
-        print(f"Data fetch error: {e}")
-        return None
+    # Current prices
+    jse = yf.Ticker("^JN0U.JO").history(period="1d")["Close"].iloc[-1]
+    usdzar = yf.Ticker("USDZAR=X").history(period="1d")["Close"].iloc[-1]
+    
+    # Historical data
+    jse_prev = fetch_historical_data("^JN0U.JO", 2)
+    usdzar_month = fetch_historical_data("USDZAR=X", 30)
+    
+    return {
+        "timestamp": now.strftime("%Y-%m-%d %H:%M"),
+        "JSE All Share": {
+            "Today": jse,
+            "Change": calculate_percentage(jse_prev, jse),
+            "Monthly": calculate_percentage(fetch_historical_data("^JN0U.JO", 30), jse),
+            "YTD": calculate_percentage(fetch_historical_data("^JN0U.JO", 365), jse)
+        },
+        # Add similar structures for other metrics
+        # ...
+    }
