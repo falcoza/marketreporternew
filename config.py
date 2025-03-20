@@ -1,14 +1,16 @@
 import os
 from datetime import datetime
 
-# Email Configuration
 EMAIL_SENDER = "ypanchia@gmail.com"
 EMAIL_PASSWORD = os.getenv("GITHUBACTIONS_PASSWORD")
-EMAIL_RECEIVER = "yeshiel@dailymaverick.co.za"
+EMAIL_RECEIVERS = [
+    "yeshiel@dailymaverick.co.za",
+    "lisakhanya@dailymaverick.co.za", 
+    "neesa@dailymaverick.co.za"
+]
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 
-# Design Constants
 THEME = {
     "background": "#FFFFFF",
     "text": "#1D1D1B",
@@ -22,10 +24,9 @@ FONT_PATHS = {
     "georgia_bold": "/usr/share/fonts/truetype/msttcorefonts/georgiab.ttf"
 }
 
-# 480px width layout: 140+100+70+70+70 = 450px + 30px padding
 REPORT_COLUMNS = [
-    ("Metric", 140),
-    ("Today", 100),
+    ("Metric", 160),
+    ("Today", 120),
     ("1D%", 70),
     ("1M%", 70),
     ("YTD%", 70)
@@ -41,9 +42,3 @@ REQUIRED_KEYS = [
     "SP500",
     "BITCOINZAR"
 ]
-
-def validate_data(data):
-    missing = [key for key in REQUIRED_KEYS if key not in data]
-    if missing:
-        raise ValueError(f"Missing data keys: {', '.join(missing)}")
-    return True
