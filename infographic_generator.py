@@ -1,54 +1,48 @@
 from PIL import Image, ImageDraw, ImageFont
-import pandas as pd
-from config import THEME
+import textwrap
+
+def load_font(size, bold=False):
+    try:
+        font_type = "georgia_bold" if bold else "georgia"
+        return ImageFont.truetype(FONT_PATHS[font_type], size)
+    except:
+        return ImageFont.load_default()
+
+def draw_table(draw, y_start, headers, data):
+    row_height = 40
+    col_widths = [c[1] for c in REPORT_COLUMNS]
+    
+    # Draw headers
+    x = 50
+    for (header, width), col_w in zip(headers, col_widths):
+        draw.rectangle([(x, y_start), (x+col_w, y_start+40)], fill=THEME["header"])
+        draw.text((x+10, y_start+5), header, font=load_font(18, True), fill="white")
+        x += col_w
+    
+    # Draw rows
+    y = y_start + 40
+    for metric, values in data.items():
+        x = 50
+        for col in headers:
+            value = values[col[0].replace(" ", "")]
+            color = THEME["positive"] if value >=0 else THEME["negative"]
+            draw.text((x+10, y+5), f"{value:.2f}%", font=load_font(16), fill=color)
+            x += col[1]
+        y += row_height
 
 def generate_infographic(data):
-    """Create branded infographic with proper error handling"""
-    try:
-        # Setup image
-        img = Image.new("RGB", (900, 600), THEME["background"])
-        draw = ImageDraw.Draw(img)
-        
-        # Font handling with fallbacks
-        try:
-            font_path = "/usr/share/fonts/truetype/msttcorefonts/georgia.ttf"  # GitHub Actions path
-            title_font = ImageFont.truetype(font_path, 36)
-            header_font = ImageFont.truetype(font_path, 24)
-            text_font = ImageFont.truetype(font_path, 22)
-        except:
-            title_font = ImageFont.load_default()
-            header_font = ImageFont.load_default()
-            text_font = ImageFont.load_default()
-
-        # Add title
-        title = f"Daily Market Report - {data['Date']}"
-        draw.text((50, 20), title, fill=THEME["text"], font=title_font)
-
-        # Create table
-        y_position = 80
-        headers = ["Metric", "Value"]
-        
-        # Draw header
-        draw.rectangle([(50, y_position), (850, y_position+40)], fill=THEME["header"])
-        for i, header in enumerate(headers):
-            x = 100 if i == 0 else 600
-            draw.text((x, y_position+5), header, font=header_font, fill="white")
-
-        # Draw rows
-        y_position += 50
-        for idx, (key, value) in enumerate(data.items()):
-            if key == "Date": continue
-            
-            bg_color = "#F5F5F5" if idx%2 == 0 else THEME["background"]
-            draw.rectangle([(50, y_position), (850, y_position+40)], fill=bg_color)
-            
-            draw.text((100, y_position+5), key, font=text_font, fill=THEME["text"])
-            draw.text((600, y_position+5), f"{value:.2f}", font=text_font, fill=THEME["text"])
-            y_position += 40
-
-        img.save("market_report.png")
-        return True
+    img = Image.new("RGB", (900, 1200), THEME["background"])
+    draw = ImageDraw.Draw(img)
     
-    except Exception as e:
-        print(f"Infographic generation failed: {e}")
-        return False
+    # Title
+    title_font = load_font(28, True)
+    draw.text((50, 20), f"Daily Market Report - {data['timestamp']}", 
+             fill=THEME["text"], font=title_font)
+    
+    # Main table
+    draw_table(draw, 80, REPORT_COLUMNS, data)
+    
+    # Save with timestamp
+    filename = f"Market_Report_{data['timestamp'].replace(':', '-')}.png"
+    img.save(filename)
+    return filename
