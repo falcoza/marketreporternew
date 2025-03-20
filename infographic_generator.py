@@ -1,95 +1,77 @@
 from PIL import Image, ImageDraw, ImageFont
 from datetime import datetime
-from config import THEME, FONT_PATHS, REPORT_COLUMNS
-
-def load_font(size=14, bold=False):
-    """Load Georgia font with fallback to default"""
-    try:
-        font_path = FONT_PATHS["georgia_bold"] if bold else FONT_PATHS["georgia"]
-        return ImageFont.truetype(font_path, size)
-    except:
-        return ImageFont.load_default()
-
-def format_percentage(value):
-    """Format percentage with sign and color"""
-    symbol = "+" if value >= 0 else ""
-    color = THEME["positive"] if value >= 0 else THEME["negative"]
-    return f"{symbol}{value:.2f}%", color
+from config import *
 
 def generate_infographic(data):
-    # Create image canvas
-    img = Image.new("RGB", (900, 1000), THEME["background"])
+    # Font configuration
+    try:
+        georgia = ImageFont.truetype(FONT_PATHS['georgia'], 24)
+        georgia_bold = ImageFont.truetype(FONT_PATHS['georgia_bold'], 28)
+        georgia_small = ImageFont.truetype(FONT_PATHS['georgia'], 18)
+    except:
+        raise Exception("Georgia font not installed!")
+
+    # New dimensions to eliminate dead space
+    img = Image.new("RGB", (850, 1000), THEME['background'])  # Reduced width
     draw = ImageDraw.Draw(img)
-    y_position = 40
 
-    # Load fonts
-    title_font = load_font(28, bold=True)
-    header_font = load_font(18, bold=True)
-    text_font = load_font(16)
-
-    # Draw title
+    # Title with source
     title = f"Daily Market Report - {data['timestamp']}"
-    draw.text((50, 20), title, fill=THEME["text"], font=title_font)
+    source_text = "Data: Yahoo Finance | CoinGecko | Google Finance"
+    
+    draw.text((50, 20), title, font=georgia_bold, fill=THEME['text'])
+    draw.text((50, 950), source_text, font=georgia_small, fill="#666666")
 
-    # Table headers
-    headers = [col[0] for col in REPORT_COLUMNS]
-    col_widths = [col[1] for col in REPORT_COLUMNS]
-    
-    # Draw header background
-    draw.rectangle([(50, 80), (850, 120)], fill=THEME["header"])
-    
-    # Draw header text
+    # Table formatting (adjusted columns)
+    cols = [
+        ("Metric", 200),
+        ("Today", 150), 
+        ("% Change", 120),
+        ("1M Change", 120),
+        ("YTD", 100)
+    ]
+
+    # Draw table headers
+    y = 80
     x = 50
-    for header, width in zip(headers, col_widths):
-        draw.text((x + 10, 85), header, font=header_font, fill="white")
+    for col, width in cols:
+        draw.rectangle([x, y, x+width, y+40], fill=THEME['header'])
+        draw.text((x+10, y+5), col, font=georgia_bold, fill="white")
         x += width
 
-    # Draw rows
-    y_position = 120
+    # Draw data rows (metrics list matches your sample)
     metrics = [
         ("JSE All Share", data["JSE All Share"]),
         ("Rand/Dollar", data["Rand/Dollar"]),
         ("Rand/Euro", data["Rand/Euro"]),
         ("Rand/GBP", data["Rand/GBP"]),
-        ("Brent ($/barrel)", data["Brent ($/barrel)"]),
-        ("Gold ($/oz)", data["Gold ($/oz)"]),
-        ("S&P500", data["S&P500"]),
-        ("Bitcoin (ZAR)", data["Bitcoin (ZAR)"])
+        ("Brent Crude", data["Brent ($/barrel)"]),
+        ("Gold", data["Gold ($/oz)"]),
+        ("S&P 500", data["S&P500"]),
+        ("Bitcoin", data["Bitcoin (ZAR)"])
     ]
 
-    for idx, (metric_name, values) in enumerate(metrics):
-        # Alternate row colors
-        bg_color = "#F5F5F5" if idx % 2 == 0 else THEME["background"]
-        draw.rectangle([(50, y_position), (850, y_position + 40)], fill=bg_color)
-
+    y = 120
+    for metric, values in metrics:
         x = 50
-        # Today's Value
-        draw.text((x + 10, y_position + 5), f"{values['Today']:,.2f}", 
-                font=text_font, fill=THEME["text"])
-        x += col_widths[0]
+        # Metric name
+        draw.text((x+10, y+5), metric, font=georgia, fill=THEME['text'])
+        x += 200
+        
+        # Values
+        for col in ["Today", "Change", "Monthly", "YTD"]:
+            if col == "Today":
+                text = f"{values[col]:,.2f}"
+                color = THEME['text']
+            else:
+                text = f"{values[col]:+.2f}%"
+                color = THEME['positive'] if values[col] >=0 else THEME['negative']
+            
+            draw.text((x+10, y+5), text, font=georgia, fill=color)
+            x += cols[cols.index((col, 0))][1]  # Dynamic width
 
-        # Daily Change
-        pct_text, pct_color = format_percentage(values["Change"])
-        draw.text((x + 10, y_position + 5), pct_text, 
-                font=text_font, fill=pct_color)
-        x += col_widths[1]
+        y += 40
 
-        # Monthly Change
-        pct_text, pct_color = format_percentage(values["Monthly"])
-        draw.text((x + 10, y_position + 5), pct_text, 
-                font=text_font, fill=pct_color)
-        x += col_widths[2]
-
-        # YTD Change
-        pct_text, pct_color = format_percentage(values["YTD"])
-        draw.text((x + 10, y_position + 5), pct_text, 
-                font=text_font, fill=pct_color)
-
-        y_position += 40
-
-    # Save with timestamp
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    filename = f"Market_Report_{timestamp}.png"
+    filename = f"Market_Report_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.png"
     img.save(filename)
-    
     return filename
