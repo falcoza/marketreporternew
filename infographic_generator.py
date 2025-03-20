@@ -21,18 +21,22 @@ def generate_infographic(data):
         x = 10
         for col, width in REPORT_COLUMNS:
             draw.rectangle([x, y, x+width, y+30], fill=THEME['header'])
-            text = col
-            w = georgia_bold.getlength(text)
-            draw.text((x + (width - w)/2, y+5), text, 
+            w = georgia_bold.getlength(col)
+            draw.text((x + (width - w)//2, y+5), col, 
                      font=georgia_bold, fill="white")
             x += width
 
         # Data rows
         y = 80
         metrics = [
-            ("JSE All Share", data["JSE All Share"]),
-            ("ZAR/USD", data["Rand/Dollar"]),
-            # ... other metrics ...
+            ("JSE All Share", data["JSEALSHARE"]),
+            ("USD/ZAR", data["USDZAR"]),
+            ("EUR/ZAR", data["EURZAR"]),
+            ("GBP/ZAR", data["GBPZAR"]),
+            ("Brent Crude", data["BRENT"]),
+            ("Gold", data["GOLD"]),
+            ("S&P 500", data["SP500"]),
+            ("Bitcoin ZAR", data["BITCOINZAR"])
         ]
 
         for name, values in metrics:
@@ -52,13 +56,13 @@ def generate_infographic(data):
                     color = THEME['positive'] if value >=0 else THEME['negative']
                 
                 w = georgia.getlength(text)
-                draw.text((x + (REPORT_COLUMNS[1][1] - w)/2, y+5), text, 
+                draw.text((x + (REPORT_COLUMNS[1][1] - w)//2, y+5), text, 
                          font=georgia, fill=color)
                 x += REPORT_COLUMNS[1][1] if col == "Today" else REPORT_COLUMNS[2][1]
             y += 34
 
         # Footer
-        footer = "Source: Yahoo Finance, CoinGecko"
+        footer = "Data: Yahoo Finance, CoinGecko · Generated: {datetime.now().strftime('%H:%M')}"
         draw.text((10, 545), footer, font=georgia, fill="#666666")
 
         filename = f"Market_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.png"
