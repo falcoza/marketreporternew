@@ -1,6 +1,4 @@
-from data_fetcher import fetch_market_data
-from infographic_generator import generate_infographic
-from email_sender import send_report_email
+from email_sender import send_report_email  # ✅ Correct import
 
 def main():
     print("🚀 Starting market report generation...")
@@ -12,13 +10,16 @@ def main():
         return
 
     # Step 2: Generate infographic
-    if not generate_infographic(market_data):
-        print("❌ Failed to generate infographic")
+    try:
+        filename = generate_infographic(market_data)
+        print(f"✅ Generated: {filename}")
+    except Exception as e:
+        print(f"❌ Infographic failed: {str(e)}")
         return
 
     # Step 3: Send email
     try:
-        send_report_email()
+        send_report_email(filename)  # ✅ Correct function call
         print("✅ Report successfully sent!")
     except Exception as e:
         print(f"❌ Email failed: {str(e)}")
