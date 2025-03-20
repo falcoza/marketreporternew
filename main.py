@@ -1,5 +1,3 @@
-# main.py
-from dotenv import load_dotenv
 from data_fetcher import fetch_market_data
 from infographic_generator import generate_infographic
 from email_sender import send_report_email
@@ -29,5 +27,4 @@ def main():
         print(f"❌ Email failed: {str(e)}")
 
 if __name__ == "__main__":
-    load_dotenv()  # Load environment variables
     main()
