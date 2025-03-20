@@ -2,7 +2,7 @@ name: Market Report Automation
 
 on:
   schedule:
-    - cron: '0 3,15 * * 1-5'  # 5AM & 5PM SAST (3AM & 3PM UTC)
+    - cron: '0 3,15 * * 1-5'  # 5AM & 5PM SAST (Mon-Fri)
   workflow_dispatch:
 
 jobs:
@@ -13,20 +13,21 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Install system fonts
+    - name: Install system dependencies
       run: |
         sudo apt-get update -y
-        sudo apt-get install -y ttf-mscorefonts-installer
+        sudo apt-get install -y libjpeg-dev zlib1g-dev ttf-mscorefonts-installer
         sudo fc-cache -f -v
 
-    - name: Set up Python
+    - name: Set up Python 3.10
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
 
-    - name: Install dependencies
+    - name: Install Python packages
       run: |
-        pip install yfinance pandas pycoingecko pillow
+        python -m pip install --upgrade pip
+        pip install yfinance pandas pycoingecko pillow python-dotenv
 
     - name: Run report generator
       env:
