@@ -1,7 +1,7 @@
 import os
 
 # Email Configuration
-EMAIL_SENDER = "your-email@gmail.com"  # Must match EXACT Gmail account
+EMAIL_SENDER = "ypanchia@gmail.com"  # Must match EXACT Gmail account
 EMAIL_PASSWORD = os.getenv("GITHUBACTIONS_PASSWORD")
 EMAIL_RECEIVER = "yeshiel@dailymaverick.co.za"
 SMTP_SERVER = "smtp.gmail.com"
