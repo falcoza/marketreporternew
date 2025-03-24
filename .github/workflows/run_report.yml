@@ -28,7 +28,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install yfinance pandas pycoingecko pillow
+        pip install yfinance pandas pycoingecko pillow pytz
 
     - name: Generate Report
       env:
