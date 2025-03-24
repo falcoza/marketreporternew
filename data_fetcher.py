@@ -1,22 +1,54 @@
-from datetime import datetime, timezone, timedelta
+import yfinance as yf
+from pycoingecko import CoinGeckoAPI
+from datetime import datetime, timedelta
+
+def calculate_percentage(old, new):
+    """Calculate percentage change with null safety"""
+    if None in (old, new) or old == 0:
+        return 0.0
+    try:
+        return ((new - old) / old) * 100
+    except ZeroDivisionError:
+        return 0.0
+
+def fetch_historical(ticker, days):
+    """Get historical price accounting for non-trading days"""
+    try:
+        # Get extra data to account for weekends/holidays
+        data = yf.Ticker(ticker).history(
+            period=f"{days + 5}d",
+            interval="1d"
+        )
+        
+        # Find the first valid closing price in the period
+        if not data.empty and len(data) > days:
+            return data['Close'].iloc[-days-1]
+        return None
+    except Exception as e:
+        print(f"⚠️ Historical data error for {ticker}: {str(e)}")
+        return None
+
+def get_bitcoin_history(cg, days):
+    """Get precise Bitcoin historical price using exact timestamps"""
+    try:
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        history = cg.get_coin_market_chart_range_by_id(
+            "bitcoin",
+            "zar",
+            int(start_date.timestamp()),
+            int(end_date.timestamp())
+        )
+        return history['prices'][0][1] if history['prices'] else None
+    except Exception as e:
+        print(f"⚠️ Bitcoin history error: {str(e)}")
+        return None
 
 def fetch_market_data():
-    """Main function to fetch all market data with accurate percentages and aligned timestamps"""
+    """Main function to fetch all market data with accurate percentages"""
     cg = CoinGeckoAPI()
-    now_utc = datetime.now(timezone.utc)
-
-    # Force 05:00 or 17:00 SAST timestamps for scheduled runs
-    if now_utc.hour == 3:  # 3AM UTC = 5AM SAST
-        report_time = (now_utc.replace(hour=5, minute=0, second=0, microsecond=0)
-                      .astimezone(timezone(timedelta(hours=2))))
-    elif now_utc.hour == 15:  # 3PM UTC = 5PM SAST
-        report_time = (now_utc.replace(hour=17, minute=0, second=0, microsecond=0)
-                      .astimezone(timezone(timedelta(hours=2))))
-    else:
-        report_time = now_utc.astimezone(timezone(timedelta(hours=2)))
-
-    timestamp = report_time.strftime("%Y-%m-%d %H:%M")
-
+    now = datetime.now()
+    
     try:
         # Current Prices
         jse = yf.Ticker("^JN0U.JO").history(period="1d")["Close"].iloc[-1]
@@ -36,15 +68,14 @@ def fetch_market_data():
         brent_1d = fetch_historical("BZ=F", 1)
         gold_1d = fetch_historical("GC=F", 1)
         sp500_1d = fetch_historical("^GSPC", 1)
-
+        
         # Bitcoin Historical
-        now = datetime.now()
         btc_1d = get_bitcoin_history(cg, 1)
         btc_1m = get_bitcoin_history(cg, 30)
         btc_ytd = get_bitcoin_history(cg, (now - datetime(now.year, 1, 1)).days)
 
         return {
-            "timestamp": timestamp,
+            "timestamp": now.strftime("%Y-%m-%d %H:%M"),
             "JSEALSHARE": {
                 "Today": jse,
                 "Change": calculate_percentage(jse_1d, jse),
@@ -94,7 +125,7 @@ def fetch_market_data():
                 "YTD": calculate_percentage(btc_ytd, bitcoin)
             }
         }
-
+        
     except Exception as e:
         print(f"❌ Critical data fetch error: {str(e)}")
         return None
