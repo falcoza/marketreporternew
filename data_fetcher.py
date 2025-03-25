@@ -104,7 +104,7 @@ def fetch_market_data():
 
         # Current Prices
         jse = get_latest_price("^JN0U.JO")
-        zarusd = get_latest_price("ZAR=X")
+        zarusd = get_latest_price("ZAR=X")  # Raw value: ZAR per USD
         eurzar = get_latest_price("EURZAR=X")
         gbpzar = get_latest_price("GBPZAR=X")
         brent = get_latest_price("BZ=F")
@@ -131,10 +131,8 @@ def fetch_market_data():
         sp500_ytd = get_ytd_reference_price("^GSPC")
         btc_ytd = get_bitcoin_ytd_price(cg)
 
-        # Currency conversions
-        usdzar = 1/zarusd if zarusd else None
-        usdzar_1d = 1/zarusd_1d if zarusd_1d else None
-        usdzar_ytd = 1/zarusd_ytd if zarusd_ytd else None
+        # For USD/ZAR, only invert the "Today" value.
+        usdzar_display = 1/zarusd if zarusd else None
 
         return {
             "timestamp": report_time.strftime("%Y-%m-%d %H:%M"),
@@ -145,10 +143,10 @@ def fetch_market_data():
                 "YTD": calculate_percentage(jse_ytd, jse)
             },
             "USDZAR": {
-                "Today": usdzar,
-                "Change": calculate_percentage(usdzar_1d, usdzar),
-                "Monthly": calculate_percentage(1/fetch_historical("ZAR=X", 30) if fetch_historical("ZAR=X", 30) else None, usdzar),
-                "YTD": calculate_percentage(usdzar_ytd, usdzar)
+                "Today": usdzar_display,  # Display inverted (USD per ZAR)
+                "Change": calculate_percentage(zarusd_1d, zarusd),
+                "Monthly": calculate_percentage(fetch_historical("ZAR=X", 30) if fetch_historical("ZAR=X", 30) else None, zarusd),
+                "YTD": calculate_percentage(zarusd_ytd, zarusd)
             },
             "EURZAR": {
                 "Today": eurzar,
