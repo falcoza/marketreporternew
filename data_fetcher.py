@@ -190,5 +190,4 @@ def fetch_market_data():
         
     except Exception as e:
         print(f"❌ Critical data fetch error: {str(e)}")
-        return Noneror: {str(e)}")
         return None
