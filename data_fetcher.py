@@ -97,9 +97,50 @@ def fetch_market_data():
                 "Monthly": calculate_percentage(fetch_historical("^JN0U.JO", 30), jse),
                 "YTD": calculate_percentage(fetch_historical("^JN0U.JO", 365), jse)
             },
-            # ... rest of the return structure remains identical ...
+            "USDZAR": {
+                "Today": usdzar,
+                "Change": calculate_percentage(usdzar_1d, usdzar),
+                "Monthly": calculate_percentage(fetch_historical("USDZAR=X", 30), usdzar),
+                "YTD": calculate_percentage(fetch_historical("USDZAR=X", 365), usdzar)
+            },
+            "EURZAR": {
+                "Today": eurzar,
+                "Change": calculate_percentage(eurzar_1d, eurzar),
+                "Monthly": calculate_percentage(fetch_historical("EURZAR=X", 30), eurzar),
+                "YTD": calculate_percentage(fetch_historical("EURZAR=X", 365), eurzar)
+            },
+            "GBPZAR": {
+                "Today": gbpzar,
+                "Change": calculate_percentage(gbpzar_1d, gbpzar),
+                "Monthly": calculate_percentage(fetch_historical("GBPZAR=X", 30), gbpzar),
+                "YTD": calculate_percentage(fetch_historical("GBPZAR=X", 365), gbpzar)
+            },
+            "BRENT": {
+                "Today": brent,
+                "Change": calculate_percentage(brent_1d, brent),
+                "Monthly": calculate_percentage(fetch_historical("BZ=F", 30), brent),
+                "YTD": calculate_percentage(fetch_historical("BZ=F", 365), brent)
+            },
+            "GOLD": {
+                "Today": gold,
+                "Change": calculate_percentage(gold_1d, gold),
+                "Monthly": calculate_percentage(fetch_historical("GC=F", 30), gold),
+                "YTD": calculate_percentage(fetch_historical("GC=F", 365), gold)
+            },
+            "SP500": {
+                "Today": sp500,
+                "Change": calculate_percentage(sp500_1d, sp500),
+                "Monthly": calculate_percentage(fetch_historical("^GSPC", 30), sp500),
+                "YTD": calculate_percentage(fetch_historical("^GSPC", 365), sp500)
+            },
+            "BITCOINZAR": {
+                "Today": bitcoin,
+                "Change": calculate_percentage(btc_1d, bitcoin),
+                "Monthly": calculate_percentage(btc_1m, bitcoin),
+                "YTD": calculate_percentage(btc_ytd, bitcoin)
+            }
         }
-
+        
     except Exception as e:
         print(f"❌ Critical data fetch error: {str(e)}")
         return None
