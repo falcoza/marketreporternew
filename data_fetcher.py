@@ -28,20 +28,24 @@ def fetch_historical(ticker, days):
         return None
 
 def get_ytd_reference_price(ticker):
-    """Fetch the first trading day's closing price of the current year"""
+    """Fetch the first TRADING day's closing price of the current year"""
     try:
         current_year = datetime.now().year
-        start_date = datetime(current_year, 1, 1).strftime('%Y-%m-%d')
-        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = datetime(current_year, 1, 1)
+        end_date = datetime.now()
         
+        # Get 2 weeks of data to account for New Year holidays
         data = yf.Ticker(ticker).history(
-            start=start_date,
+            start=start_date - timedelta(days=14),  # Buffer before Jan 1
             end=end_date,
             interval="1d"
         )
         
         if not data.empty:
-            return data['Close'].iloc[0]  # First trading day of the year
+            # Find first trading day AFTER Jan 1
+            ytd_data = data.loc[data.index >= start_date]
+            if not ytd_data.empty:
+                return ytd_data['Close'].iloc[0]
         return None
     except Exception as e:
         print(f"⚠️ YTD reference price error for {ticker}: {str(e)}")
