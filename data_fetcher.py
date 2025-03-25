@@ -1,6 +1,7 @@
 import yfinance as yf
 from pycoingecko import CoinGeckoAPI
 from datetime import datetime, timezone, timedelta
+import pytz
 
 def calculate_percentage(old, new):
     """Calculate percentage change with null safety"""
@@ -14,12 +15,10 @@ def calculate_percentage(old, new):
 def fetch_historical(ticker, days):
     """Get historical price accounting for non-trading days"""
     try:
-        # Get extra data to account for weekends/holidays
         data = yf.Ticker(ticker).history(
-            period=f"{days + 5}d",  # Buffer for non-trading days
+            period=f"{days + 5}d",
             interval="1d"
         )
-        
         if not data.empty and len(data) >= days:
             return data['Close'].iloc[-days-1]
         return None
@@ -28,25 +27,32 @@ def fetch_historical(ticker, days):
         return None
 
 def get_ytd_reference_price(ticker):
-    """Fetch the first trading day's closing price of the current year.
-    
-    To ensure correct behavior all year, the query is restricted to a fixed window
-    (the first 30 days of January) so that it always retrieves the early-year data.
-    """
+    """Fetch the first trading day's closing price of the current year with proper timezone handling"""
     try:
+        tkr = yf.Ticker(ticker)
         current_year = datetime.now().year
-        start_date = datetime(current_year, 1, 1)
-        end_date = start_date + timedelta(days=30)  # Fixed window: first 30 days of January
         
-        data = yf.Ticker(ticker).history(
-            start=start_date - timedelta(days=14),  # Buffer before Jan 1
-            end=end_date,
+        # Get exchange timezone
+        tz_name = tkr.info.get('exchangeTimezoneName', 'UTC')
+        tz = pytz.timezone(tz_name)
+        
+        # Create start and end dates in exchange's timezone
+        start_date = tz.localize(datetime(current_year, 1, 1))
+        end_date = start_date + timedelta(days=30)
+        buffer_start = start_date - timedelta(days=14)
+        
+        # Convert to UTC for yfinance query
+        data = tkr.history(
+            start=buffer_start.astimezone(pytz.utc),
+            end=end_date.astimezone(pytz.utc),
             interval="1d"
         )
         
         if not data.empty:
-            # Filter for dates on or after Jan 1 to get actual trading days.
-            ytd_data = data.loc[data.index >= start_date]
+            # Convert index to exchange timezone
+            data.index = data.index.tz_convert(tz)
+            # Filter for dates >= Jan 1 in exchange timezone
+            ytd_data = data[data.index >= start_date]
             if not ytd_data.empty:
                 return ytd_data['Close'].iloc[0]
         return None
@@ -54,73 +60,59 @@ def get_ytd_reference_price(ticker):
         print(f"⚠️ YTD reference price error for {ticker}: {str(e)}")
         return None
 
-def get_bitcoin_history(cg, days):
-    """Get precise Bitcoin historical price using exact timestamps"""
+def get_bitcoin_ytd_price(cg):
+    """Get Bitcoin price on Jan 1 of current year"""
     try:
-        end_date = datetime.now(timezone.utc)
-        start_date = end_date - timedelta(days=days)
+        start_date = datetime(datetime.now().year, 1, 1, tzinfo=timezone.utc)
         history = cg.get_coin_market_chart_range_by_id(
             "bitcoin",
             "zar",
             int(start_date.timestamp()),
-            int(end_date.timestamp())
+            int(datetime.now(timezone.utc).timestamp())
         )
-        return history['prices'][0][1] if history['prices'] else None
+        # Find first price on or after Jan 1
+        for price in history.get('prices', []):
+            if datetime.fromtimestamp(price[0]/1000, tz=timezone.utc) >= start_date:
+                return price[1]
+        return None
     except Exception as e:
-        print(f"⚠️ Bitcoin history error: {str(e)}")
+        print(f"⚠️ Bitcoin YTD error: {str(e)}")
         return None
 
 def fetch_market_data():
-    """Main function to fetch all market data with SAST timestamps"""
     cg = CoinGeckoAPI()
     
-    # Get current time in UTC and convert to SAST (UTC+2)
+    # SAST time handling
     utc_now = datetime.now(timezone.utc)
-    sast_offset = timedelta(hours=2)
-    sast_time = utc_now.astimezone(timezone(sast_offset))
+    sast_time = utc_now.astimezone(timezone(timedelta(hours=2)))
     
-    # For scheduled runs, force 05:00 or 17:00 SAST timestamps
-    if utc_now.hour == 3:    # 3AM UTC = 5AM SAST
-        report_time = sast_time.replace(hour=5, minute=0, second=0, microsecond=0)
-    elif utc_now.hour == 15: # 3PM UTC = 5PM SAST
-        report_time = sast_time.replace(hour=17, minute=0, second=0, microsecond=0)
+    if utc_now.hour == 3:
+        report_time = sast_time.replace(hour=5, minute=0)
+    elif utc_now.hour == 15:
+        report_time = sast_time.replace(hour=17, minute=0)
     else:
         report_time = sast_time
-    
-    timestamp = report_time.strftime("%Y-%m-%d %H:%M")
 
     try:
-        # ===== IMPROVED DATA FETCHING =====
         def get_latest_price(ticker):
-            """Get the most recent closing price with forced refresh"""
             try:
-                data = yf.Ticker(ticker).history(
-                    period="2d",  # Ensures we get at least 1 trading day
-                    interval="1d",
-                    prepost=False  # Only official market hours
-                )
-                if not data.empty:
-                    return data['Close'].dropna().iloc[-1]  # Last valid close
-                return None
+                data = yf.Ticker(ticker).history(period="2d", interval="1d")
+                return data['Close'].iloc[-1] if not data.empty else None
             except Exception as e:
-                print(f"⚠️ Error fetching {ticker}: {str(e)}")
+                print(f"⚠️ Price fetch error for {ticker}: {str(e)}")
                 return None
 
-        # Current Prices (using improved fetcher)
+        # Current Prices
         jse = get_latest_price("^JN0U.JO")
-        zarusd = get_latest_price("ZAR=X")  # This is ZAR/USD (how many USD per 1 ZAR)
-        eurzar = get_latest_price("EURZAR=X")  # This is EUR/ZAR (how many ZAR per 1 EUR)
-        gbpzar = get_latest_price("GBPZAR=X")  # This is GBP/ZAR (how many ZAR per 1 GBP)
+        zarusd = get_latest_price("ZAR=X")
+        eurzar = get_latest_price("EURZAR=X")
+        gbpzar = get_latest_price("GBPZAR=X")
         brent = get_latest_price("BZ=F")
         gold = get_latest_price("GC=F")
         sp500 = get_latest_price("^GSPC")
         bitcoin = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
 
-        # Debug output to verify fresh data
-        print(f"DEBUG - JSE: {jse} (Updated: {datetime.now().strftime('%H:%M')})")
-        print(f"DEBUG - S&P 500: {sp500} (Updated: {datetime.now().strftime('%H:%M')})")
-
-        # Historical Prices (1D, 1M)
+        # Historical Prices
         jse_1d = fetch_historical("^JN0U.JO", 1)
         zarusd_1d = fetch_historical("ZAR=X", 1)
         eurzar_1d = fetch_historical("EURZAR=X", 1)
@@ -129,7 +121,7 @@ def fetch_market_data():
         gold_1d = fetch_historical("GC=F", 1)
         sp500_1d = fetch_historical("^GSPC", 1)
 
-        # YTD Reference Prices (First trading day of the year)
+        # YTD Prices
         jse_ytd = get_ytd_reference_price("^JN0U.JO")
         zarusd_ytd = get_ytd_reference_price("ZAR=X")
         eurzar_ytd = get_ytd_reference_price("EURZAR=X")
@@ -137,19 +129,15 @@ def fetch_market_data():
         brent_ytd = get_ytd_reference_price("BZ=F")
         gold_ytd = get_ytd_reference_price("GC=F")
         sp500_ytd = get_ytd_reference_price("^GSPC")
+        btc_ytd = get_bitcoin_ytd_price(cg)
 
-        # Bitcoin Historical
-        btc_1d = get_bitcoin_history(cg, 1)
-        btc_1m = get_bitcoin_history(cg, 30)
-        btc_ytd = get_bitcoin_history(cg, (datetime.now(timezone.utc) - datetime(datetime.now().year, 1, 1, tzinfo=timezone.utc)).days)
-
-        # Calculate USD/ZAR from ZAR/USD
+        # Currency conversions
         usdzar = 1/zarusd if zarusd else None
         usdzar_1d = 1/zarusd_1d if zarusd_1d else None
         usdzar_ytd = 1/zarusd_ytd if zarusd_ytd else None
 
         return {
-            "timestamp": timestamp,
+            "timestamp": report_time.strftime("%Y-%m-%d %H:%M"),
             "JSEALSHARE": {
                 "Today": jse,
                 "Change": calculate_percentage(jse_1d, jse),
@@ -194,12 +182,12 @@ def fetch_market_data():
             },
             "BITCOINZAR": {
                 "Today": bitcoin,
-                "Change": calculate_percentage(btc_1d, bitcoin),
-                "Monthly": calculate_percentage(btc_1m, bitcoin),
+                "Change": calculate_percentage(fetch_historical("BTC-ZAR", 1), bitcoin),
+                "Monthly": calculate_percentage(fetch_historical("BTC-ZAR", 30), bitcoin),
                 "YTD": calculate_percentage(btc_ytd, bitcoin)
             }
         }
         
     except Exception as e:
-        print(f"❌ Critical data fetch error: {str(e)}")
+        print(f"❌ Critical error: {str(e)}")
         return None
