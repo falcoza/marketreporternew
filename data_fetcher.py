@@ -16,16 +16,35 @@ def fetch_historical(ticker, days):
     try:
         # Get extra data to account for weekends/holidays
         data = yf.Ticker(ticker).history(
-            period=f"{days + 5}d",
+            period=f"{days + 5}d",  # Buffer for non-trading days
             interval="1d"
         )
         
-        # Find the first valid closing price in the period
-        if not data.empty and len(data) > days:
+        if not data.empty and len(data) >= days:
             return data['Close'].iloc[-days-1]
         return None
     except Exception as e:
         print(f"⚠️ Historical data error for {ticker}: {str(e)}")
+        return None
+
+def get_ytd_reference_price(ticker):
+    """Fetch the first trading day's closing price of the current year"""
+    try:
+        current_year = datetime.now().year
+        start_date = datetime(current_year, 1, 1).strftime('%Y-%m-%d')
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        
+        data = yf.Ticker(ticker).history(
+            start=start_date,
+            end=end_date,
+            interval="1d"
+        )
+        
+        if not data.empty:
+            return data['Close'].iloc[0]  # First trading day of the year
+        return None
+    except Exception as e:
+        print(f"⚠️ YTD reference price error for {ticker}: {str(e)}")
         return None
 
 def get_bitcoin_history(cg, days):
@@ -74,7 +93,7 @@ def fetch_market_data():
         sp500 = yf.Ticker("^GSPC").history(period="1d")["Close"].iloc[-1]
         bitcoin = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
 
-        # Historical Prices (1D, 1M, YTD)
+        # Historical Prices (1D, 1M)
         jse_1d = fetch_historical("^JN0U.JO", 1)
         usdzar_1d = fetch_historical("USDZAR=X", 1)
         eurzar_1d = fetch_historical("EURZAR=X", 1)
@@ -83,11 +102,19 @@ def fetch_market_data():
         gold_1d = fetch_historical("GC=F", 1)
         sp500_1d = fetch_historical("^GSPC", 1)
 
+        # YTD Reference Prices (First trading day of the year)
+        jse_ytd = get_ytd_reference_price("^JN0U.JO")
+        usdzar_ytd = get_ytd_reference_price("USDZAR=X")
+        eurzar_ytd = get_ytd_reference_price("EURZAR=X")
+        gbpzar_ytd = get_ytd_reference_price("GBPZAR=X")
+        brent_ytd = get_ytd_reference_price("BZ=F")
+        gold_ytd = get_ytd_reference_price("GC=F")
+        sp500_ytd = get_ytd_reference_price("^GSPC")
+
         # Bitcoin Historical
-        now = datetime.now(timezone.utc)
         btc_1d = get_bitcoin_history(cg, 1)
         btc_1m = get_bitcoin_history(cg, 30)
-        btc_ytd = get_bitcoin_history(cg, (now - datetime(now.year, 1, 1).replace(tzinfo=timezone.utc)).days)
+        btc_ytd = get_bitcoin_history(cg, (datetime.now(timezone.utc) - datetime(datetime.now().year, 1, 1, tzinfo=timezone.utc)).days)
 
         return {
             "timestamp": timestamp,
@@ -95,43 +122,43 @@ def fetch_market_data():
                 "Today": jse,
                 "Change": calculate_percentage(jse_1d, jse),
                 "Monthly": calculate_percentage(fetch_historical("^JN0U.JO", 30), jse),
-                "YTD": calculate_percentage(fetch_historical("^JN0U.JO", 365), jse)
+                "YTD": calculate_percentage(jse_ytd, jse)
             },
             "USDZAR": {
                 "Today": usdzar,
                 "Change": calculate_percentage(usdzar_1d, usdzar),
                 "Monthly": calculate_percentage(fetch_historical("USDZAR=X", 30), usdzar),
-                "YTD": calculate_percentage(fetch_historical("USDZAR=X", 365), usdzar)
+                "YTD": calculate_percentage(usdzar_ytd, usdzar)
             },
             "EURZAR": {
                 "Today": eurzar,
                 "Change": calculate_percentage(eurzar_1d, eurzar),
                 "Monthly": calculate_percentage(fetch_historical("EURZAR=X", 30), eurzar),
-                "YTD": calculate_percentage(fetch_historical("EURZAR=X", 365), eurzar)
+                "YTD": calculate_percentage(eurzar_ytd, eurzar)
             },
             "GBPZAR": {
                 "Today": gbpzar,
                 "Change": calculate_percentage(gbpzar_1d, gbpzar),
                 "Monthly": calculate_percentage(fetch_historical("GBPZAR=X", 30), gbpzar),
-                "YTD": calculate_percentage(fetch_historical("GBPZAR=X", 365), gbpzar)
+                "YTD": calculate_percentage(gbpzar_ytd, gbpzar)
             },
             "BRENT": {
                 "Today": brent,
                 "Change": calculate_percentage(brent_1d, brent),
                 "Monthly": calculate_percentage(fetch_historical("BZ=F", 30), brent),
-                "YTD": calculate_percentage(fetch_historical("BZ=F", 365), brent)
+                "YTD": calculate_percentage(brent_ytd, brent)
             },
             "GOLD": {
                 "Today": gold,
                 "Change": calculate_percentage(gold_1d, gold),
                 "Monthly": calculate_percentage(fetch_historical("GC=F", 30), gold),
-                "YTD": calculate_percentage(fetch_historical("GC=F", 365), gold)
+                "YTD": calculate_percentage(gold_ytd, gold)
             },
             "SP500": {
                 "Today": sp500,
                 "Change": calculate_percentage(sp500_1d, sp500),
                 "Monthly": calculate_percentage(fetch_historical("^GSPC", 30), sp500),
-                "YTD": calculate_percentage(fetch_historical("^GSPC", 365), sp500)
+                "YTD": calculate_percentage(sp500_ytd, sp500)
             },
             "BITCOINZAR": {
                 "Today": bitcoin,
