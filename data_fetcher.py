@@ -83,15 +83,35 @@ def fetch_market_data():
     timestamp = report_time.strftime("%Y-%m-%d %H:%M")
 
     try:
-        # Current Prices
-        jse = yf.Ticker("^JN0U.JO").history(period="1d")["Close"].iloc[-1]
-        usdzar = yf.Ticker("USDZAR=X").history(period="1d")["Close"].iloc[-1]
-        eurzar = yf.Ticker("EURZAR=X").history(period="1d")["Close"].iloc[-1]
-        gbpzar = yf.Ticker("GBPZAR=X").history(period="1d")["Close"].iloc[-1]
-        brent = yf.Ticker("BZ=F").history(period="1d")["Close"].iloc[-1]
-        gold = yf.Ticker("GC=F").history(period="1d")["Close"].iloc[-1]
-        sp500 = yf.Ticker("^GSPC").history(period="1d")["Close"].iloc[-1]
+        # ===== IMPROVED DATA FETCHING =====
+        def get_latest_price(ticker):
+            """Get the most recent closing price with forced refresh"""
+            try:
+                data = yf.Ticker(ticker).history(
+                    period="2d",  # Ensures we get at least 1 trading day
+                    interval="1d",
+                    prepost=False  # Only official market hours
+                )
+                if not data.empty:
+                    return data['Close'].dropna().iloc[-1]  # Last valid close
+                return None
+            except Exception as e:
+                print(f"⚠️ Error fetching {ticker}: {str(e)}")
+                return None
+
+        # Current Prices (using improved fetcher)
+        jse = get_latest_price("^JN0U.JO")
+        usdzar = get_latest_price("USDZAR=X")
+        eurzar = get_latest_price("EURZAR=X")
+        gbpzar = get_latest_price("GBPZAR=X")
+        brent = get_latest_price("BZ=F")
+        gold = get_latest_price("GC=F")
+        sp500 = get_latest_price("^GSPC")
         bitcoin = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
+
+        # Debug output to verify fresh data
+        print(f"DEBUG - JSE: {jse} (Updated: {datetime.now().strftime('%H:%M')})")
+        print(f"DEBUG - S&P 500: {sp500} (Updated: {datetime.now().strftime('%H:%M')})")
 
         # Historical Prices (1D, 1M)
         jse_1d = fetch_historical("^JN0U.JO", 1)
@@ -170,4 +190,5 @@ def fetch_market_data():
         
     except Exception as e:
         print(f"❌ Critical data fetch error: {str(e)}")
+        return Noneror: {str(e)}")
         return None
