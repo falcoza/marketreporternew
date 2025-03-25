@@ -105,9 +105,9 @@ def fetch_market_data():
 
         # Current Prices (using improved fetcher)
         jse = get_latest_price("^JN0U.JO")
-        usdzar = get_latest_price("USDZAR=X")
-        eurzar = get_latest_price("EURZAR=X")
-        gbpzar = get_latest_price("GBPZAR=X")
+        usdzar = get_latest_price("ZAR=X")  # Returns ZAR per USD
+        eurzar = get_latest_price("EURZAR=X")  # Returns ZAR per EUR
+        gbpzar = get_latest_price("GBPZAR=X")  # Returns ZAR per GBP
         brent = get_latest_price("BZ=F")
         gold = get_latest_price("GC=F")
         sp500 = get_latest_price("^GSPC")
@@ -119,18 +119,18 @@ def fetch_market_data():
 
         # Historical Prices (1D, 1M)
         jse_1d = fetch_historical("^JN0U.JO", 1)
-        usdzar_1d = fetch_historical("USDZAR=X", 1)
-        eurzar_1d = fetch_historical("EURZAR=X", 1)
-        gbpzar_1d = fetch_historical("GBPZAR=X", 1)
+        zarusd_1d = fetch_historical("ZAR=X", 1)  # ZAR per USD
+        eurzar_1d = fetch_historical("EURZAR=X", 1)  # ZAR per EUR
+        gbpzar_1d = fetch_historical("GBPZAR=X", 1)  # ZAR per GBP
         brent_1d = fetch_historical("BZ=F", 1)
         gold_1d = fetch_historical("GC=F", 1)
         sp500_1d = fetch_historical("^GSPC", 1)
 
         # YTD Reference Prices (First trading day of the year)
         jse_ytd = get_ytd_reference_price("^JN0U.JO")
-        usdzar_ytd = get_ytd_reference_price("USDZAR=X")
-        eurzar_ytd = get_ytd_reference_price("EURZAR=X")
-        gbpzar_ytd = get_ytd_reference_price("GBPZAR=X")
+        zarusd_ytd = get_ytd_reference_price("ZAR=X")  # ZAR per USD
+        eurzar_ytd = get_ytd_reference_price("EURZAR=X")  # ZAR per EUR
+        gbpzar_ytd = get_ytd_reference_price("GBPZAR=X")  # ZAR per GBP
         brent_ytd = get_ytd_reference_price("BZ=F")
         gold_ytd = get_ytd_reference_price("GC=F")
         sp500_ytd = get_ytd_reference_price("^GSPC")
@@ -149,22 +149,22 @@ def fetch_market_data():
                 "YTD": calculate_percentage(jse_ytd, jse)
             },
             "USDZAR": {
-                "Today": usdzar,
-                "Change": calculate_percentage(usdzar_1d, usdzar),
-                "Monthly": calculate_percentage(fetch_historical("USDZAR=X", 30), usdzar),
-                "YTD": calculate_percentage(usdzar_ytd, usdzar)
+                "Today": 1/usdzar if usdzar else None,  # Invert to show USD/ZAR
+                "Change": calculate_percentage(1/zarusd_1d if zarusd_1d else None, 1/usdzar if usdzar else None),
+                "Monthly": calculate_percentage(1/fetch_historical("ZAR=X", 30) if fetch_historical("ZAR=X", 30) else None, 1/usdzar if usdzar else None),
+                "YTD": calculate_percentage(1/zarusd_ytd if zarusd_ytd else None, 1/usdzar if usdzar else None)
             },
             "EURZAR": {
-                "Today": eurzar,
-                "Change": calculate_percentage(eurzar_1d, eurzar),
-                "Monthly": calculate_percentage(fetch_historical("EURZAR=X", 30), eurzar),
-                "YTD": calculate_percentage(eurzar_ytd, eurzar)
+                "Today": 1/eurzar if eurzar else None,  # Invert to show EUR/ZAR
+                "Change": calculate_percentage(1/eurzar_1d if eurzar_1d else None, 1/eurzar if eurzar else None),
+                "Monthly": calculate_percentage(1/fetch_historical("EURZAR=X", 30) if fetch_historical("EURZAR=X", 30) else None, 1/eurzar if eurzar else None),
+                "YTD": calculate_percentage(1/eurzar_ytd if eurzar_ytd else None, 1/eurzar if eurzar else None)
             },
             "GBPZAR": {
-                "Today": gbpzar,
-                "Change": calculate_percentage(gbpzar_1d, gbpzar),
-                "Monthly": calculate_percentage(fetch_historical("GBPZAR=X", 30), gbpzar),
-                "YTD": calculate_percentage(gbpzar_ytd, gbpzar)
+                "Today": 1/gbpzar if gbpzar else None,  # Invert to show GBP/ZAR
+                "Change": calculate_percentage(1/gbpzar_1d if gbpzar_1d else None, 1/gbpzar if gbpzar else None),
+                "Monthly": calculate_percentage(1/fetch_historical("GBPZAR=X", 30) if fetch_historical("GBPZAR=X", 30) else None, 1/gbpzar if gbpzar else None),
+                "YTD": calculate_percentage(1/gbpzar_ytd if gbpzar_ytd else None, 1/gbpzar if gbpzar else None)
             },
             "BRENT": {
                 "Today": brent,
