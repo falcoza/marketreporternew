@@ -7,7 +7,7 @@ EMAIL_PASSWORD = os.getenv("GITHUBACTIONS_PASSWORD")
 EMAIL_RECEIVERS = [
     "yeshiel@dailymaverick.co.za",
     "neesa@dailymaverick.co.za",
-    "lindsey@dailymaverick.co.za,
+    "lindsey@dailymaverick.co.za",
     "lisakanya@dailymaverick.co.za"# Added comma and closing quote
 ]
 SMTP_SERVER = "smtp.gmail.com"
