@@ -33,7 +33,7 @@ def get_ytd_reference_price(ticker):
         current_year = datetime.now().year
         
         # Manual timezone override for JSE ticker
-        if ticker == "^JN0U.JO":
+        if ticker == "J203.JO":  # Changed to JSE All Share ticker
             tz_name = 'Africa/Johannesburg'
         else:
             tz_name = tkr.info.get('exchangeTimezoneName', 'UTC')
@@ -133,8 +133,8 @@ def fetch_market_data():
                 print(f"⚠️ Price fetch error for {ticker}: {str(e)}")
                 return None
 
-        # Current Prices
-        jse = get_latest_price("^JN0U.JO")  # JSE Top 40 index
+        # Current Prices - CHANGED JSE TICKER TO J203.JO
+        jse = get_latest_price("J203.JO")  # Correct JSE All Share Index ticker
         zarusd = get_latest_price("ZAR=X")
         eurzar = get_latest_price("EURZAR=X")
         gbpzar = get_latest_price("GBPZAR=X")
@@ -146,8 +146,8 @@ def fetch_market_data():
         bitcoin_data = get_bitcoin_data(cg)
         bitcoin = bitcoin_data["current"] if bitcoin_data else None
 
-        # Historical Prices
-        jse_1d = fetch_historical("^JN0U.JO", 1)
+        # Historical Prices - CHANGED JSE TICKER TO J203.JO
+        jse_1d = fetch_historical("J203.JO", 1)
         zarusd_1d = fetch_historical("ZAR=X", 1)
         eurzar_1d = fetch_historical("EURZAR=X", 1)
         gbpzar_1d = fetch_historical("GBPZAR=X", 1)
@@ -155,8 +155,8 @@ def fetch_market_data():
         gold_1d = fetch_historical("GC=F", 1)
         sp500_1d = fetch_historical("^GSPC", 1)
 
-        # YTD Prices
-        jse_ytd = get_ytd_reference_price("^JN0U.JO")
+        # YTD Prices - CHANGED JSE TICKER TO J203.JO
+        jse_ytd = get_ytd_reference_price("J203.JO")
         zarusd_ytd = get_ytd_reference_price("ZAR=X")
         eurzar_ytd = get_ytd_reference_price("EURZAR=X")
         gbpzar_ytd = get_ytd_reference_price("GBPZAR=X")
@@ -179,7 +179,7 @@ def fetch_market_data():
             "JSEALSHARE": {
                 "Today": jse,
                 "Change": calculate_percentage(jse_1d, jse),
-                "Monthly": calculate_percentage(fetch_historical("^JN0U.JO", 30), jse),
+                "Monthly": calculate_percentage(fetch_historical("J203.JO", 30), jse),
                 "YTD": calculate_percentage(jse_ytd, jse)
             },
             "USDZAR": {
