@@ -19,7 +19,8 @@ def fetch_historical(ticker, days):
             period=f"{days + 5}d",
             interval="1d"
         )
-        if not data.empty and len(data) >= days:
+        # Corrected the length check to days + 1
+        if not data.empty and len(data) >= days + 1:
             return data['Close'].iloc[-days-1]
         return None
     except Exception as e:
@@ -32,8 +33,11 @@ def get_ytd_reference_price(ticker):
         tkr = yf.Ticker(ticker)
         current_year = datetime.now().year
         
-        # Get exchange timezone
-        tz_name = tkr.info.get('exchangeTimezoneName', 'UTC')
+        # Manual timezone override for JSE ticker
+        if ticker == "^JN0U.JO":
+            tz_name = 'Africa/Johannesburg'
+        else:
+            tz_name = tkr.info.get('exchangeTimezoneName', 'UTC')
         tz = pytz.timezone(tz_name)
         
         # Create start and end dates in exchange's timezone
