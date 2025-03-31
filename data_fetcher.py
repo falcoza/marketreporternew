@@ -30,15 +30,16 @@ def get_ytd_reference_price(ticker):
     """Fetch the first trading day's closing price of the current year with proper timezone handling"""
     try:
         tkr = yf.Ticker(ticker)
-        current_year = datetime.now().year
-        
-        # Manual timezone override for JSE ticker(s)
-        if ticker in ["^JN0U.JO", "^JALSHARES"]:
+        # Some index tickers do not return proper info; use fallback if needed.
+        info = tkr.info if tkr.info is not None else {}
+        # For South African indices, use Africa/Johannesburg
+        if ticker in ["JALSHARES.JO", "^JN0U.JO", "^JALSHARES"]:
             tz_name = 'Africa/Johannesburg'
         else:
-            tz_name = tkr.info.get('exchangeTimezoneName', 'UTC')
+            tz_name = info.get('exchangeTimezoneName', 'UTC')
         tz = pytz.timezone(tz_name)
         
+        current_year = datetime.now(tz).year
         start_date = tz.localize(datetime(current_year, 1, 1))
         end_date = start_date + timedelta(days=30)
         buffer_start = start_date - timedelta(days=14)
@@ -82,7 +83,7 @@ def fetch_bitcoin_historical(cg, days):
     try:
         now_ts = datetime.now(timezone.utc).timestamp()
         target_ts = now_ts - days * 86400  # days in seconds
-        window = 3600  # 1 hour window (in seconds)
+        window = 3600  # 1 hour window in seconds
         from_ts = int(target_ts - window)
         to_ts = int(target_ts + window)
         history = cg.get_coin_market_chart_range_by_id("bitcoin", "zar", from_ts, to_ts)
@@ -119,8 +120,8 @@ def fetch_market_data():
                 print(f"⚠️ Price fetch error for {ticker}: {str(e)}")
                 return None
 
-        # Updated JSE ticker to "^JALSHARES" for correct JSE All Share Index data
-        jse = get_latest_price("^JALSHARES")
+        # Use the updated ticker for JSE All Share Index
+        jse = get_latest_price("JALSHARES.JO")
         zarusd = get_latest_price("ZAR=X")
         eurzar = get_latest_price("EURZAR=X")
         gbpzar = get_latest_price("GBPZAR=X")
@@ -130,7 +131,7 @@ def fetch_market_data():
         bitcoin = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
 
         # Historical Prices (for non-crypto assets)
-        jse_1d = fetch_historical("^JALSHARES", 1)
+        jse_1d = fetch_historical("JALSHARES.JO", 1)
         zarusd_1d = fetch_historical("ZAR=X", 1)
         eurzar_1d = fetch_historical("EURZAR=X", 1)
         gbpzar_1d = fetch_historical("GBPZAR=X", 1)
@@ -139,7 +140,7 @@ def fetch_market_data():
         sp500_1d = fetch_historical("^GSPC", 1)
 
         # YTD Prices
-        jse_ytd = get_ytd_reference_price("^JALSHARES")
+        jse_ytd = get_ytd_reference_price("JALSHARES.JO")
         zarusd_ytd = get_ytd_reference_price("ZAR=X")
         eurzar_ytd = get_ytd_reference_price("EURZAR=X")
         gbpzar_ytd = get_ytd_reference_price("GBPZAR=X")
@@ -149,16 +150,16 @@ def fetch_market_data():
         btc_ytd = get_bitcoin_ytd_price(cg)
 
         # Use the ZAR value directly for USD/ZAR
-        usdzar = zarusd if zarusd else None
-        usdzar_1d = zarusd_1d if zarusd_1d else None
-        usdzar_ytd = zarusd_ytd if zarusd_ytd else None
+        usdzar = zarusd if zarusd is not None else None
+        usdzar_1d = zarusd_1d if zarusd_1d is not None else None
+        usdzar_ytd = zarusd_ytd if zarusd_ytd is not None else None
 
         return {
             "timestamp": report_time.strftime("%Y-%m-%d %H:%M"),
             "JSEALSHARE": {
                 "Today": jse,
                 "Change": calculate_percentage(jse_1d, jse),
-                "Monthly": calculate_percentage(fetch_historical("^JALSHARES", 30), jse),
+                "Monthly": calculate_percentage(fetch_historical("JALSHARES.JO", 30), jse),
                 "YTD": calculate_percentage(jse_ytd, jse)
             },
             "USDZAR": {
@@ -208,3 +209,11 @@ def fetch_market_data():
     except Exception as e:
         print(f"❌ Critical error: {str(e)}")
         return None
+
+if __name__ == "__main__":
+    data = fetch_market_data()
+    if data:
+        print("🚀 Starting market report generation...")
+        print(data)
+    else:
+        print("❌ Infographic generation failed.")
