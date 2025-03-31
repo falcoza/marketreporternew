@@ -19,7 +19,6 @@ def fetch_historical(ticker, days):
             period=f"{days + 5}d",
             interval="1d"
         )
-        # Corrected the length check to days + 1
         if not data.empty and len(data) >= days + 1:
             return data['Close'].iloc[-days-1]
         return None
@@ -64,9 +63,13 @@ def get_ytd_reference_price(ticker):
         print(f"⚠️ YTD reference price error for {ticker}: {str(e)}")
         return None
 
-def get_bitcoin_ytd_price(cg):
-    """Get Bitcoin price on Jan 1 of current year"""
+def get_bitcoin_data(cg):
+    """Get Bitcoin price data including current and historical prices in ZAR"""
     try:
+        # Current price
+        current_price = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
+        
+        # YTD price
         start_date = datetime(datetime.now().year, 1, 1, tzinfo=timezone.utc)
         history = cg.get_coin_market_chart_range_by_id(
             "bitcoin",
@@ -75,12 +78,36 @@ def get_bitcoin_ytd_price(cg):
             int(datetime.now(timezone.utc).timestamp())
         )
         # Find first price on or after Jan 1
+        ytd_price = None
         for price in history.get('prices', []):
             if datetime.fromtimestamp(price[0]/1000, tz=timezone.utc) >= start_date:
-                return price[1]
-        return None
+                ytd_price = price[1]
+                break
+        
+        # 1-day price
+        one_day_ago = datetime.now(timezone.utc) - timedelta(days=1)
+        one_day_price = None
+        for price in history.get('prices', []):
+            if datetime.fromtimestamp(price[0]/1000, tz=timezone.utc) >= one_day_ago:
+                one_day_price = price[1]
+                break
+        
+        # 30-day price
+        thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+        thirty_day_price = None
+        for price in history.get('prices', []):
+            if datetime.fromtimestamp(price[0]/1000, tz=timezone.utc) >= thirty_days_ago:
+                thirty_day_price = price[1]
+                break
+        
+        return {
+            "current": current_price,
+            "ytd": ytd_price,
+            "one_day": one_day_price,
+            "thirty_day": thirty_day_price
+        }
     except Exception as e:
-        print(f"⚠️ Bitcoin YTD error: {str(e)}")
+        print(f"⚠️ Bitcoin data error: {str(e)}")
         return None
 
 def fetch_market_data():
@@ -107,14 +134,17 @@ def fetch_market_data():
                 return None
 
         # Current Prices
-        jse = get_latest_price("^JN0U.JO")
+        jse = get_latest_price("^JN0U.JO")  # JSE Top 40 index
         zarusd = get_latest_price("ZAR=X")
         eurzar = get_latest_price("EURZAR=X")
         gbpzar = get_latest_price("GBPZAR=X")
         brent = get_latest_price("BZ=F")
         gold = get_latest_price("GC=F")
         sp500 = get_latest_price("^GSPC")
-        bitcoin = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
+        
+        # Bitcoin data - using the new consolidated function
+        bitcoin_data = get_bitcoin_data(cg)
+        bitcoin = bitcoin_data["current"] if bitcoin_data else None
 
         # Historical Prices
         jse_1d = fetch_historical("^JN0U.JO", 1)
@@ -133,7 +163,11 @@ def fetch_market_data():
         brent_ytd = get_ytd_reference_price("BZ=F")
         gold_ytd = get_ytd_reference_price("GC=F")
         sp500_ytd = get_ytd_reference_price("^GSPC")
-        btc_ytd = get_bitcoin_ytd_price(cg)
+        
+        # Bitcoin historical data
+        btc_1d = bitcoin_data["one_day"] if bitcoin_data else None
+        btc_30d = bitcoin_data["thirty_day"] if bitcoin_data else None
+        btc_ytd = bitcoin_data["ytd"] if bitcoin_data else None
 
         # Use the ZAR value directly for USD/ZAR
         usdzar = zarusd if zarusd else None
@@ -186,8 +220,8 @@ def fetch_market_data():
             },
             "BITCOINZAR": {
                 "Today": bitcoin,
-                "Change": calculate_percentage(fetch_historical("BTC-ZAR", 1), bitcoin),
-                "Monthly": calculate_percentage(fetch_historical("BTC-ZAR", 30), bitcoin),
+                "Change": calculate_percentage(btc_1d, bitcoin),
+                "Monthly": calculate_percentage(btc_30d, bitcoin),
                 "YTD": calculate_percentage(btc_ytd, bitcoin)
             }
         }
