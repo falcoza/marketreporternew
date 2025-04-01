@@ -179,10 +179,10 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         sp500_ytd = get_ytd_reference_price("^GSPC")
         btc_ytd = get_bitcoin_ytd_price(cg)
 
-        # Prepare USDZAR data (inverse of ZARUSD)
-        usdzar = 1 / zarusd if zarusd else None
-        usdzar_1d = 1 / zarusd_1d if zarusd_1d else None
-        usdzar_ytd = 1 / zarusd_ytd if zarusd_ytd else None
+        # Prepare USDZAR data (direct from ZAR=X which is USD/ZAR)
+        usdzar = zarusd
+        usdzar_1d = zarusd_1d
+        usdzar_ytd = zarusd_ytd
 
         # Construct result dictionary
         result = {
