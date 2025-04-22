@@ -17,7 +17,7 @@ SMTP_PORT = 587
 THEME = {
     "background": "#FFFFFF",
     "text": "#1D1D1B",
-    "header": "#B31B1B",
+    "header": "#005782",
     "positive": "#008000",
     "negative": "#FF0000"
 }
