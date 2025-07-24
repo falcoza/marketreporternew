@@ -10,7 +10,7 @@ import os
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Persistent caching for historical data
+# Persistent cache for historical lookups
 CACHE_FILE = "historical_cache.json"
 try:
     with open(CACHE_FILE, "r") as f:
@@ -129,4 +129,66 @@ def get_bitcoin_ytd_price(cg: CoinGeckoAPI) -> Optional[float]:
         return history['prices'][0][1] if history.get('prices') else None
     except Exception as e:
         logging.error(f"Bitcoin YTD error: {e}")
+        return None
+
+def fetch_market_data() -> Optional[Dict[str, Any]]:
+    cg = CoinGeckoAPI()
+    sast_time = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=2)))
+    report_hour = 17 if sast_time.hour >= 15 else 5
+    report_time = sast_time.replace(hour=report_hour, minute=0)
+
+    try:
+        jse_tickers = ["^J203.JO", "J203.JO"]
+        jse_price, jse_ticker = None, None
+        for ticker in jse_tickers:
+            price = get_latest_price(ticker)
+            if price:
+                jse_price, jse_ticker = price, ticker
+                break
+
+        if not jse_price:
+            logging.error("Failed to fetch JSE All Share")
+            return None
+
+        prices = {
+            "ZAR=X": get_latest_price("ZAR=X"),
+            "EURZAR=X": get_latest_price("EURZAR=X"),
+            "GBPZAR=X": get_latest_price("GBPZAR=X"),
+            "BZ=F": get_latest_price("BZ=F"),
+            "GC=F": get_latest_price("GC=F"),
+            "^GSPC": get_latest_price("^GSPC")
+        }
+
+        try:
+            bitcoin_price = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
+        except Exception as e:
+            logging.error(f"Bitcoin price error: {e}")
+            bitcoin_price = None
+
+        result = {
+            "timestamp": report_time.strftime("%Y-%m-%d %H:%M"),
+            "JSEALSHARE": {
+                "Today": jse_price,
+                "Change": calculate_percentage(fetch_historical(jse_ticker, 1), jse_price),
+                "Monthly": calculate_percentage(fetch_historical(jse_ticker, 30), jse_price),
+                "YTD": calculate_percentage(get_ytd_reference_price(jse_ticker), jse_price),
+            },
+            "USDZAR": {
+                "Today": 1 / prices["ZAR=X"] if prices["ZAR=X"] else None,
+                "Change": calculate_percentage(1 / fetch_historical("ZAR=X", 1), 1 / prices["ZAR=X"]) if prices["ZAR=X"] else None,
+                "Monthly": calculate_percentage(1 / fetch_historical("ZAR=X", 30), 1 / prices["ZAR=X"]) if prices["ZAR=X"] else None,
+                "YTD": calculate_percentage(1 / get_ytd_reference_price("ZAR=X"), 1 / prices["ZAR=X"]) if prices["ZAR=X"] else None,
+            },
+            "BITCOINZAR": {
+                "Today": bitcoin_price,
+                "Change": calculate_percentage(fetch_bitcoin_historical(cg, 1), bitcoin_price),
+                "Monthly": calculate_percentage(fetch_bitcoin_historical(cg, 30), bitcoin_price),
+                "YTD": calculate_percentage(get_bitcoin_ytd_price(cg), bitcoin_price),
+            }
+        }
+
+        return result
+
+    except Exception as e:
+        logging.critical(f"Fatal error in fetch_market_data: {e}")
         return None
