@@ -3,7 +3,7 @@ from pycoingecko import CoinGeckoAPI
 from datetime import datetime, timezone, timedelta
 import pytz
 from typing import Optional, Dict, Any
-import investpy
+import investpy_reborn as investpy
 
 
 def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
@@ -121,7 +121,7 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
             "timestamp": now.strftime("%Y-%m-%d %H:%M"),
             "JSEALSHARE": {
                 "Today": jse,
-                "Change": 0.0,  # historical % change patching in next step
+                "Change": 0.0,
                 "Monthly": 0.0,
                 "YTD": 0.0
             },
