@@ -5,8 +5,7 @@ import pytz
 from typing import Optional, Dict, Any
 
 def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
-    """Calculate percentage change with null safety and type hints"""
-    if None in (old, new) or old == 0:
+    if None in (old, new) or old is None or old == 0 or old < 10:
         return 0.0
     try:
         return ((new - old) / old) * 100
@@ -14,20 +13,21 @@ def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
         return 0.0
 
 def fetch_historical(ticker: str, days: int) -> Optional[float]:
-    """Get historical price accounting for non-trading days using yfinance"""
     try:
-        buffer_days = max(5, days // 5)  # Add buffer for weekends/holidays
+        buffer_days = max(5, days // 5)
         stock = yf.Ticker(ticker)
         data = stock.history(period=f"{days + buffer_days}d", interval="1d")
         if not data.empty and len(data) >= days + 1:
-            return data['Close'].iloc[-days-1]
+            price = data['Close'].iloc[-days-1]
+            if price is None or price < 10:
+                return None
+            return price
         return None
     except Exception as e:
         print(f"⚠️ Historical data error for {ticker}: {str(e)}")
         return None
 
 def get_ytd_reference_price(ticker: str) -> Optional[float]:
-    """Fetch the first trading day's closing price of the current year"""
     try:
         tkr = yf.Ticker(ticker)
         tz = pytz.timezone('Africa/Johannesburg')
@@ -40,7 +40,10 @@ def get_ytd_reference_price(ticker: str) -> Optional[float]:
             data.index = data.index.tz_convert(tz)
             ytd_data = data[data.index >= start_date]
             if not ytd_data.empty:
-                return ytd_data['Close'].iloc[0]
+                price = ytd_data['Close'].iloc[0]
+                if price is None or price < 10:
+                    return None
+                return price
         return None
     except Exception as e:
         print(f"⚠️ YTD reference price error for {ticker}: {str(e)}")
@@ -77,22 +80,18 @@ def get_latest_price(ticker: str) -> Optional[float]:
     try:
         stock = yf.Ticker(ticker)
         data = stock.history(period="2d", interval="1d")
-        return data['Close'].iloc[-1] if not data.empty else None
+        price = data['Close'].iloc[-1] if not data.empty else None
+        if price is None or price < 10:
+            return None
+        return price
     except Exception as e:
         print(f"⚠️ Price fetch error for {ticker}: {str(e)}")
         return None
 
 def fetch_market_data() -> Optional[Dict[str, Any]]:
     cg = CoinGeckoAPI()
-    utc_now = datetime.now(timezone.utc)
-    sast_time = utc_now.astimezone(timezone(timedelta(hours=2)))
-
-    if utc_now.hour == 3:
-        report_time = sast_time.replace(hour=5, minute=0)
-    elif utc_now.hour == 15:
-        report_time = sast_time.replace(hour=17, minute=0)
-    else:
-        report_time = sast_time
+    tz = pytz.timezone("Africa/Johannesburg")
+    now = datetime.now(tz)
 
     try:
         jse_tickers = ["^J203.JO", "J203.JO", "JALSHARES.JO"]
@@ -108,94 +107,70 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
             print("⚠️ Could not fetch JSE All Share data from any ticker")
             return None
 
-        zarusd = get_latest_price("ZAR=X")
-        eurzar = get_latest_price("EURZAR=X")
-        gbpzar = get_latest_price("GBPZAR=X")
-        brent = get_latest_price("BZ=F")
-        gold = get_latest_price("GC=F")
-        sp500 = get_latest_price("^GSPC")
+        # Fetch forex and commodities
+        forex = {k: get_latest_price(k) for k in ["ZAR=X", "EURZAR=X", "GBPZAR=X"]}
+        commodities = {k: get_latest_price(k) for k in ["BZ=F", "GC=F"]}
+        indices = {"^GSPC": get_latest_price("^GSPC")}
 
         try:
-            bitcoin_data = cg.get_price(ids="bitcoin", vs_currencies="zar")
-            bitcoin = bitcoin_data["bitcoin"]["zar"]
+            bitcoin_now = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
         except Exception as e:
             print(f"⚠️ Bitcoin current price error: {str(e)}")
-            bitcoin = None
+            bitcoin_now = None
 
-        jse_1d = fetch_historical(jse_ticker_used, 1) if jse_ticker_used else None
-        zarusd_1d = fetch_historical("ZAR=X", 1)
-        eurzar_1d = fetch_historical("EURZAR=X", 1)
-        gbpzar_1d = fetch_historical("GBPZAR=X", 1)
-        brent_1d = fetch_historical("BZ=F", 1)
-        gold_1d = fetch_historical("GC=F", 1)
-        sp500_1d = fetch_historical("^GSPC", 1)
-
-        jse_ytd = get_ytd_reference_price(jse_ticker_used) if jse_ticker_used else None
-        zarusd_ytd = get_ytd_reference_price("ZAR=X")
-        eurzar_ytd = get_ytd_reference_price("EURZAR=X")
-        gbpzar_ytd = get_ytd_reference_price("GBPZAR=X")
-        brent_ytd = get_ytd_reference_price("BZ=F")
-        gold_ytd = get_ytd_reference_price("GC=F")
-        sp500_ytd = get_ytd_reference_price("^GSPC")
-        btc_ytd = get_bitcoin_ytd_price(cg)
-
-        usdzar = zarusd
-        usdzar_1d = zarusd_1d
-        usdzar_ytd = zarusd_ytd
-
-        result = {
-            "timestamp": report_time.strftime("%Y-%m-%d %H:%M"),
+        results = {
+            "timestamp": now.strftime("%Y-%m-%d %H:%M"),
             "JSEALSHARE": {
                 "Today": jse,
-                "Change": calculate_percentage(jse_1d, jse),
-                "Monthly": calculate_percentage(fetch_historical(jse_ticker_used, 30), jse) if jse_ticker_used else None,
-                "YTD": calculate_percentage(jse_ytd, jse)
+                "Change": calculate_percentage(fetch_historical(jse_ticker_used, 1), jse),
+                "Monthly": calculate_percentage(fetch_historical(jse_ticker_used, 30), jse),
+                "YTD": calculate_percentage(get_ytd_reference_price(jse_ticker_used), jse)
             },
             "USDZAR": {
-                "Today": usdzar,
-                "Change": calculate_percentage(usdzar_1d, usdzar),
-                "Monthly": calculate_percentage(fetch_historical("ZAR=X", 30), usdzar),
-                "YTD": calculate_percentage(usdzar_ytd, usdzar)
+                "Today": forex["ZAR=X"],
+                "Change": calculate_percentage(fetch_historical("ZAR=X", 1), forex["ZAR=X"]),
+                "Monthly": calculate_percentage(fetch_historical("ZAR=X", 30), forex["ZAR=X"]),
+                "YTD": calculate_percentage(get_ytd_reference_price("ZAR=X"), forex["ZAR=X"])
             },
             "EURZAR": {
-                "Today": eurzar,
-                "Change": calculate_percentage(eurzar_1d, eurzar),
-                "Monthly": calculate_percentage(fetch_historical("EURZAR=X", 30), eurzar),
-                "YTD": calculate_percentage(eurzar_ytd, eurzar)
+                "Today": forex["EURZAR=X"],
+                "Change": calculate_percentage(fetch_historical("EURZAR=X", 1), forex["EURZAR=X"]),
+                "Monthly": calculate_percentage(fetch_historical("EURZAR=X", 30), forex["EURZAR=X"]),
+                "YTD": calculate_percentage(get_ytd_reference_price("EURZAR=X"), forex["EURZAR=X"])
             },
             "GBPZAR": {
-                "Today": gbpzar,
-                "Change": calculate_percentage(gbpzar_1d, gbpzar),
-                "Monthly": calculate_percentage(fetch_historical("GBPZAR=X", 30), gbpzar),
-                "YTD": calculate_percentage(gbpzar_ytd, gbpzar)
+                "Today": forex["GBPZAR=X"],
+                "Change": calculate_percentage(fetch_historical("GBPZAR=X", 1), forex["GBPZAR=X"]),
+                "Monthly": calculate_percentage(fetch_historical("GBPZAR=X", 30), forex["GBPZAR=X"]),
+                "YTD": calculate_percentage(get_ytd_reference_price("GBPZAR=X"), forex["GBPZAR=X"])
             },
             "BRENT": {
-                "Today": brent,
-                "Change": calculate_percentage(brent_1d, brent),
-                "Monthly": calculate_percentage(fetch_historical("BZ=F", 30), brent),
-                "YTD": calculate_percentage(brent_ytd, brent)
+                "Today": commodities["BZ=F"],
+                "Change": calculate_percentage(fetch_historical("BZ=F", 1), commodities["BZ=F"]),
+                "Monthly": calculate_percentage(fetch_historical("BZ=F", 30), commodities["BZ=F"]),
+                "YTD": calculate_percentage(get_ytd_reference_price("BZ=F"), commodities["BZ=F"])
             },
             "GOLD": {
-                "Today": gold,
-                "Change": calculate_percentage(gold_1d, gold),
-                "Monthly": calculate_percentage(fetch_historical("GC=F", 30), gold),
-                "YTD": calculate_percentage(gold_ytd, gold)
+                "Today": commodities["GC=F"],
+                "Change": calculate_percentage(fetch_historical("GC=F", 1), commodities["GC=F"]),
+                "Monthly": calculate_percentage(fetch_historical("GC=F", 30), commodities["GC=F"]),
+                "YTD": calculate_percentage(get_ytd_reference_price("GC=F"), commodities["GC=F"])
             },
             "SP500": {
-                "Today": sp500,
-                "Change": calculate_percentage(sp500_1d, sp500),
-                "Monthly": calculate_percentage(fetch_historical("^GSPC", 30), sp500),
-                "YTD": calculate_percentage(sp500_ytd, sp500)
+                "Today": indices["^GSPC"],
+                "Change": calculate_percentage(fetch_historical("^GSPC", 1), indices["^GSPC"]),
+                "Monthly": calculate_percentage(fetch_historical("^GSPC", 30), indices["^GSPC"]),
+                "YTD": calculate_percentage(get_ytd_reference_price("^GSPC"), indices["^GSPC"])
             },
             "BITCOINZAR": {
-                "Today": bitcoin,
-                "Change": calculate_percentage(fetch_bitcoin_historical(cg, 1), bitcoin),
-                "Monthly": calculate_percentage(fetch_bitcoin_historical(cg, 30), bitcoin),
-                "YTD": calculate_percentage(btc_ytd, bitcoin)
+                "Today": bitcoin_now,
+                "Change": calculate_percentage(fetch_bitcoin_historical(cg, 1), bitcoin_now),
+                "Monthly": calculate_percentage(fetch_bitcoin_historical(cg, 30), bitcoin_now),
+                "YTD": calculate_percentage(get_bitcoin_ytd_price(cg), bitcoin_now)
             }
         }
 
-        return result
+        return results
 
     except Exception as e:
         print(f"❌ Critical error in fetch_market_data: {str(e)}")
