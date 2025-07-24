@@ -45,13 +45,16 @@ def fetch_historical(ticker: str, days: int) -> Optional[float]:
         start_date = end_date - timedelta(days=days + buffer_days)
         df = stock.history(start=start_date, end=end_date, interval="1d")
 
-        if len(df) >= days + 1:
-            result = df['Close'].iloc[-days - 1]
+        # Filter out anomalously low values (e.g. placeholder or zero)
+        df = df[df['Close'] > 50]
+
+        if len(df) >= days:
+            result = df['Close'].iloc[-days]
             _HIST_CACHE[cache_key] = result
             save_cache()
             return result
 
-        logging.warning(f"Insufficient data for {ticker} ({days}d)")
+        logging.warning(f"Insufficient or invalid data for {ticker} ({days}d)")
         return None
     except Exception as e:
         logging.error(f"Historical error for {ticker}: {e}")
@@ -72,9 +75,10 @@ def get_ytd_reference_price(ticker: str) -> Optional[float]:
             df.index = df.index.tz_convert(tz)
             ytd_df = df[df.index >= year_start]
             if not ytd_df.empty:
-                return ytd_df['Close'].iloc[0]
+                price = ytd_df['Close'].iloc[0]
+                return price if price > 50 else None
 
-        logging.warning(f"No YTD data for {ticker}")
+        logging.warning(f"No valid YTD data for {ticker}")
         return None
     except Exception as e:
         logging.error(f"YTD error for {ticker}: {e}")
@@ -89,7 +93,8 @@ def get_latest_price(ticker: str) -> Optional[float]:
             return stock.info['regularMarketPrice']
         df = stock.history(period="1d", interval="1d")
         if not df.empty:
-            return df["Close"].iloc[-1]
+            price = df["Close"].iloc[-1]
+            return price if price > 50 else None
         logging.warning(f"No price data for {ticker}")
         return None
     except Exception as e:
