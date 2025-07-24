@@ -5,7 +5,7 @@ import pytz
 from typing import Optional, Dict, Any
 
 def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
-    if None in (old, new) or old is None or old == 0 or old < 10:
+    if None in (old, new) or old == 0:
         return 0.0
     try:
         return ((new - old) / old) * 100
@@ -14,15 +14,12 @@ def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
 
 def fetch_historical(ticker: str, days: int) -> Optional[float]:
     try:
-        buffer_days = max(5, days // 5)
+        buffer_days = max(20, days * 3)
         stock = yf.Ticker(ticker)
         data = stock.history(period=f"{days + buffer_days}d", interval="1d")
-        if not data.empty and len(data) >= days + 1:
-            price = data['Close'].iloc[-days-1]
-            if price is None or price < 10:
-                return None
-            return price
-        return None
+        if len(data) < days + 1:
+            return None
+        return data['Close'].iloc[-days-1]
     except Exception as e:
         print(f"⚠️ Historical data error for {ticker}: {str(e)}")
         return None
@@ -40,10 +37,7 @@ def get_ytd_reference_price(ticker: str) -> Optional[float]:
             data.index = data.index.tz_convert(tz)
             ytd_data = data[data.index >= start_date]
             if not ytd_data.empty:
-                price = ytd_data['Close'].iloc[0]
-                if price is None or price < 10:
-                    return None
-                return price
+                return ytd_data['Close'].iloc[0]
         return None
     except Exception as e:
         print(f"⚠️ YTD reference price error for {ticker}: {str(e)}")
@@ -80,10 +74,7 @@ def get_latest_price(ticker: str) -> Optional[float]:
     try:
         stock = yf.Ticker(ticker)
         data = stock.history(period="2d", interval="1d")
-        price = data['Close'].iloc[-1] if not data.empty else None
-        if price is None or price < 10:
-            return None
-        return price
+        return data['Close'].iloc[-1] if not data.empty else None
     except Exception as e:
         print(f"⚠️ Price fetch error for {ticker}: {str(e)}")
         return None
@@ -106,6 +97,8 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         if jse is None:
             print("⚠️ Could not fetch JSE All Share data from any ticker")
             return None
+
+        print(f"Using ticker: {jse_ticker_used} for JSE")
 
         forex = {k: get_latest_price(k) for k in ["ZAR=X", "EURZAR=X", "GBPZAR=X"]}
         commodities = {k: get_latest_price(k) for k in ["BZ=F", "GC=F"]}
