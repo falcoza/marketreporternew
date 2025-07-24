@@ -162,12 +162,12 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         historical[key] = {"1d": hist_1d, "30d": hist_30d}
         ytd[key] = ytd_price
 
-    prices["BTCZAR"] = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
-    historical["BTCZAR"] = {
+    prices["BITCOINZAR"] = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
+    historical["BITCOINZAR"] = {
         "1d": fetch_bitcoin_historical(cg, 1),
         "30d": fetch_bitcoin_historical(cg, 30)
     }
-    ytd["BTCZAR"] = get_bitcoin_ytd_price(cg)
+    ytd["BITCOINZAR"] = get_bitcoin_ytd_price(cg)
 
     def build(asset):
         return {
@@ -186,5 +186,5 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         "BRENT": build("BRENT"),
         "GOLD": build("GOLD"),
         "SP500": build("SP500"),
-        "BTCZAR": build("BTCZAR")
+        "BITCOINZAR": build("BITCOINZAR")
     }
