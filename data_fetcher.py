@@ -1,4 +1,3 @@
-```python
 import yfinance as yf
 from pycoingecko import CoinGeckoAPI
 from datetime import datetime, timezone, timedelta
@@ -19,9 +18,9 @@ def fetch_historical(ticker: str, days: int) -> Optional[float]:
     try:
         buffer_days = max(5, days // 5)
         stock = yf.Ticker(ticker)
-        data = stock.history(period=f"{days + buffer_days}d", interval="1d")
-        if not data.empty and len(data) >= days + 1:
-            return data['Close'].iloc[-days-1]
+        df = stock.history(period=f"{days + buffer_days}d", interval="1d")
+        if not df.empty and len(df) >= days + 1:
+            return df['Close'].iloc[-days-1]
         return None
     except Exception as e:
         print(f"⚠️ Historical data error for {ticker}: {e}")
@@ -49,11 +48,12 @@ def get_ytd_reference_price(ticker: str) -> Optional[float]:
         return None
 
 def get_bitcoin_ytd_price(cg: CoinGeckoAPI) -> Optional[float]:
-    """Get Bitcoin price on Jan 1 of the current year using CoinGecko."""
+    """Get Bitcoin price on Jan 1 of the current year using CoinGecko."""
     try:
         year = datetime.now(timezone.utc).year
         start = datetime(year, 1, 1, tzinfo=timezone.utc)
         end = start + timedelta(days=1)
+
         history = cg.get_coin_market_chart_range_by_id(
             "bitcoin", "zar",
             int(start.timestamp()),
@@ -70,6 +70,7 @@ def fetch_bitcoin_historical(cg: CoinGeckoAPI, days: int) -> Optional[float]:
         now = datetime.now(timezone.utc)
         target = now - timedelta(days=days)
         window = timedelta(hours=12)
+
         history = cg.get_coin_market_chart_range_by_id(
             "bitcoin", "zar",
             int((target - window).timestamp()),
@@ -78,6 +79,7 @@ def fetch_bitcoin_historical(cg: CoinGeckoAPI, days: int) -> Optional[float]:
         prices = history.get("prices", [])
         if not prices:
             return None
+
         target_ts = target.timestamp() * 1000
         closest = min(prices, key=lambda x: abs(x[0] - target_ts))
         return closest[1]
@@ -171,14 +173,14 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         sp500_1d  = fetch_historical("^GSPC", 1)
 
         # YTD reference prices
-        jse_ytd   = get_ytd_reference_price(jse_ticker) if jse_ticker else None
-        zarusd_ytd= get_ytd_reference_price("ZAR=X")
-        eurzar_ytd= get_ytd_reference_price("EURZAR=X")
-        gbpzar_ytd= get_ytd_reference_price("GBPZAR=X")
-        brent_ytd = get_ytd_reference_price("BZ=F")
-        gold_ytd  = get_ytd_reference_price("GC=F")
-        sp500_ytd = get_ytd_reference_price("^GSPC")
-        btc_ytd   = get_bitcoin_ytd_price(cg)
+        jse_ytd    = get_ytd_reference_price(jse_ticker) if jse_ticker else None
+        zarusd_ytd = get_ytd_reference_price("ZAR=X")
+        eurzar_ytd = get_ytd_reference_price("EURZAR=X")
+        gbpzar_ytd = get_ytd_reference_price("GBPZAR=X")
+        brent_ytd  = get_ytd_reference_price("BZ=F")
+        gold_ytd   = get_ytd_reference_price("GC=F")
+        sp500_ytd  = get_ytd_reference_price("^GSPC")
+        btc_ytd    = get_bitcoin_ytd_price(cg)
 
         # USDZAR is just the inverse of ZAR=X
         usdzar     = zarusd
@@ -243,6 +245,10 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         print(f"❌ Critical error in fetch_market_data: {e}")
         return None
 
-if __name__ == "__
-::contentReference[oaicite:0]{index=0}
-```
+if __name__ == "__main__":
+    data = fetch_market_data()
+    if data:
+        print("🚀 Market data fetched successfully:")
+        print(data)
+    else:
+        print("❌ Failed to fetch market data")
