@@ -45,17 +45,28 @@ def fetch_historical(ticker: str, days: int) -> Optional[float]:
         start_date = end_date - timedelta(days=days + buffer_days)
         df = stock.history(start=start_date, end=end_date, interval="1d")
 
-        # Filter out anomalously low values (e.g. placeholder or zero)
+        # Filter out anomalously low values
         df = df[df['Close'] > 50]
 
-        if len(df) >= days:
-            result = df['Close'].iloc[-days]
-            _HIST_CACHE[cache_key] = result
-            save_cache()
-            return result
+        if df.empty:
+            logging.warning(f"No valid data for {ticker} ({days}d)")
+            return None
 
-        logging.warning(f"Insufficient or invalid data for {ticker} ({days}d)")
-        return None
+        # Detect early morning before markets update and fallback
+        tz = pytz.timezone('Africa/Johannesburg')
+        now_hour = datetime.now(tz).hour
+        if days == 1 and now_hour < 9 and len(df) >= 2:
+            result = df['Close'].iloc[-2]  # fallback to two days ago
+        elif len(df) >= days:
+            result = df['Close'].iloc[-days]
+        else:
+            logging.warning(f"Insufficient data rows for {ticker} ({days}d)")
+            return None
+
+        _HIST_CACHE[cache_key] = result
+        save_cache()
+        return result
+
     except Exception as e:
         logging.error(f"Historical error for {ticker}: {e}")
         return None
