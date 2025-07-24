@@ -1,31 +1,11 @@
-from typing import Optional, Dict, Any, Tuple
 import yfinance as yf
 from pycoingecko import CoinGeckoAPI
 from datetime import datetime, timezone, timedelta
 import pytz
-import logging
-import json
-import os
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# Persistent cache for historical lookups
-CACHE_FILE = "historical_cache.json"
-try:
-    with open(CACHE_FILE, "r") as f:
-        _HIST_CACHE: Dict[str, float] = json.load(f)
-except FileNotFoundError:
-    _HIST_CACHE = {}
-
-def save_cache():
-    with open(CACHE_FILE, "w") as f:
-        json.dump(_HIST_CACHE, f)
-
-def make_cache_key(ticker: str, days: int) -> str:
-    return f"{ticker}_{days}"
+from typing import Optional, Dict, Any
 
 def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
+    """Calculate percentage change with null safety and type hints"""
     if None in (old, new) or old == 0:
         return 0.0
     try:
@@ -34,173 +14,197 @@ def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
         return 0.0
 
 def fetch_historical(ticker: str, days: int) -> Optional[float]:
-    cache_key = make_cache_key(ticker, days)
-    if cache_key in _HIST_CACHE:
-        return _HIST_CACHE[cache_key]
-
+    """Get historical price accounting for non-trading days using yfinance"""
     try:
-        buffer_days = max(10, days * 2)
+        buffer_days = max(5, days // 5)  # Add buffer for weekends/holidays
         stock = yf.Ticker(ticker)
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days + buffer_days)
-        df = stock.history(start=start_date, end=end_date, interval="1d")
-
-        # Filter out anomalously low values
-        df = df[df['Close'] > 50]
-
-        if df.empty:
-            logging.warning(f"No valid data for {ticker} ({days}d)")
-            return None
-
-        # Detect early morning before markets update and fallback
-        tz = pytz.timezone('Africa/Johannesburg')
-        now_hour = datetime.now(tz).hour
-        if days == 1 and now_hour < 9 and len(df) >= 2:
-            result = df['Close'].iloc[-2]  # fallback to two days ago
-        elif len(df) >= days:
-            result = df['Close'].iloc[-days]
-        else:
-            logging.warning(f"Insufficient data rows for {ticker} ({days}d)")
-            return None
-
-        _HIST_CACHE[cache_key] = result
-        save_cache()
-        return result
-
+        data = stock.history(period=f"{days + buffer_days}d", interval="1d")
+        if not data.empty and len(data) >= days + 1:
+            return data['Close'].iloc[-days-1]
+        return None
     except Exception as e:
-        logging.error(f"Historical error for {ticker}: {e}")
+        print(f"⚠️ Historical data error for {ticker}: {str(e)}")
         return None
 
 def get_ytd_reference_price(ticker: str) -> Optional[float]:
+    """Fetch the first trading day's closing price of the current year"""
     try:
+        tkr = yf.Ticker(ticker)
         tz = pytz.timezone('Africa/Johannesburg')
         now = datetime.now(tz)
-        year_start = tz.localize(datetime(now.year, 1, 1))
-        start_date = year_start - timedelta(days=21)
-        end_date = year_start + timedelta(days=21)
-
-        df = yf.Ticker(ticker).history(start=start_date, end=end_date, interval="1d")
-        if not df.empty:
-            if df.index.tz is None:
-                df.index = df.index.tz_localize("UTC")
-            df.index = df.index.tz_convert(tz)
-            ytd_df = df[df.index >= year_start]
-            if not ytd_df.empty:
-                price = ytd_df['Close'].iloc[0]
-                return price if price > 50 else None
-
-        logging.warning(f"No valid YTD data for {ticker}")
+        start_date = tz.localize(datetime(now.year, 1, 1))
+        end_date = start_date + timedelta(days=30)
+        buffer_start = start_date - timedelta(days=14)
+        data = tkr.history(start=buffer_start, end=end_date, interval="1d")
+        if not data.empty:
+            data.index = data.index.tz_convert(tz)
+            ytd_data = data[data.index >= start_date]
+            if not ytd_data.empty:
+                return ytd_data['Close'].iloc[0]
         return None
     except Exception as e:
-        logging.error(f"YTD error for {ticker}: {e}")
+        print(f"⚠️ YTD reference price error for {ticker}: {str(e)}")
         return None
 
-def get_latest_price(ticker: str) -> Optional[float]:
+def get_bitcoin_ytd_price(cg: CoinGeckoAPI) -> Optional[float]:
     try:
-        stock = yf.Ticker(ticker)
-        if hasattr(stock, 'fast_info') and stock.fast_info.last_price is not None:
-            return stock.fast_info.last_price
-        if 'regularMarketPrice' in stock.info:
-            return stock.info['regularMarketPrice']
-        df = stock.history(period="1d", interval="1d")
-        if not df.empty:
-            price = df["Close"].iloc[-1]
-            return price if price > 50 else None
-        logging.warning(f"No price data for {ticker}")
-        return None
+        current_year = datetime.now(timezone.utc).year
+        start_date = datetime(current_year, 1, 1, tzinfo=timezone.utc)
+        end_date = start_date + timedelta(days=1)
+        history = cg.get_coin_market_chart_range_by_id("bitcoin", "zar", int(start_date.timestamp()), int(end_date.timestamp()))
+        return history['prices'][0][1] if history.get('prices') else None
     except Exception as e:
-        logging.error(f"Price error for {ticker}: {e}")
+        print(f"⚠️ Bitcoin YTD error: {str(e)}")
         return None
 
 def fetch_bitcoin_historical(cg: CoinGeckoAPI, days: int) -> Optional[float]:
     try:
         now = datetime.now(timezone.utc)
-        target = now - timedelta(days=days)
+        target_date = now - timedelta(days=days)
         window = timedelta(hours=12)
-        history = cg.get_coin_market_chart_range_by_id(
-            "bitcoin", "zar",
-            int((target - window).timestamp()),
-            int((target + window).timestamp())
-        )
+        history = cg.get_coin_market_chart_range_by_id("bitcoin", "zar", int((target_date - window).timestamp()), int((target_date + window).timestamp()))
         prices = history.get("prices", [])
         if not prices:
             return None
-        target_ts = target.timestamp() * 1000
-        closest = min(prices, key=lambda x: abs(x[0] - target_ts))
-        return closest[1]
+        target_ts = target_date.timestamp() * 1000
+        closest_price = min(prices, key=lambda x: abs(x[0] - target_ts))
+        return closest_price[1]
     except Exception as e:
-        logging.error(f"Bitcoin historical data error for {days} days: {e}")
+        print(f"⚠️ Bitcoin historical data error for {days} days: {str(e)}")
         return None
 
-def get_bitcoin_ytd_price(cg: CoinGeckoAPI) -> Optional[float]:
+def get_latest_price(ticker: str) -> Optional[float]:
     try:
-        year = datetime.now(timezone.utc).year
-        start = datetime(year, 1, 1, tzinfo=timezone.utc)
-        end = start + timedelta(days=1)
-        history = cg.get_coin_market_chart_range_by_id(
-            "bitcoin", "zar",
-            int(start.timestamp()),
-            int(end.timestamp())
-        )
-        return history['prices'][0][1] if history.get('prices') else None
+        stock = yf.Ticker(ticker)
+        data = stock.history(period="2d", interval="1d")
+        return data['Close'].iloc[-1] if not data.empty else None
     except Exception as e:
-        logging.error(f"Bitcoin YTD error: {e}")
+        print(f"⚠️ Price fetch error for {ticker}: {str(e)}")
         return None
 
 def fetch_market_data() -> Optional[Dict[str, Any]]:
     cg = CoinGeckoAPI()
     utc_now = datetime.now(timezone.utc)
     sast_time = utc_now.astimezone(timezone(timedelta(hours=2)))
-    report_hour = 17 if sast_time.hour >= 15 else 5
-    report_time = sast_time.replace(hour=report_hour, minute=0, second=0, microsecond=0)
 
-    tickers = {
-        "JSEALSHARE": ["^J203.JO", "J203.JO"],
-        "USDZAR": ["ZAR=X"],
-        "EURZAR": ["EURZAR=X"],
-        "GBPZAR": ["GBPZAR=X"],
-        "BRENT": ["BZ=F"],
-        "GOLD": ["GC=F"],
-        "SP500": ["^GSPC"]
-    }
+    if utc_now.hour == 3:
+        report_time = sast_time.replace(hour=5, minute=0)
+    elif utc_now.hour == 15:
+        report_time = sast_time.replace(hour=17, minute=0)
+    else:
+        report_time = sast_time
 
-    prices, historical, ytd = {}, {}, {}
+    try:
+        jse_tickers = ["^J203.JO", "J203.JO", "JALSHARES.JO"]
+        jse = None
+        jse_ticker_used = None
+        for ticker in jse_tickers:
+            jse = get_latest_price(ticker)
+            if jse is not None:
+                jse_ticker_used = ticker
+                break
 
-    for key, candidates in tickers.items():
-        value = None
-        for ticker in candidates:
-            value = get_latest_price(ticker)
-            if value: break
-        prices[key] = value
-        hist_1d = fetch_historical(candidates[0], 1)
-        hist_30d = fetch_historical(candidates[0], 30)
-        ytd_price = get_ytd_reference_price(candidates[0])
-        historical[key] = {"1d": hist_1d, "30d": hist_30d}
-        ytd[key] = ytd_price
+        if jse is None:
+            print("⚠️ Could not fetch JSE All Share data from any ticker")
+            return None
 
-    prices["BITCOINZAR"] = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
-    historical["BITCOINZAR"] = {
-        "1d": fetch_bitcoin_historical(cg, 1),
-        "30d": fetch_bitcoin_historical(cg, 30)
-    }
-    ytd["BITCOINZAR"] = get_bitcoin_ytd_price(cg)
+        zarusd = get_latest_price("ZAR=X")
+        eurzar = get_latest_price("EURZAR=X")
+        gbpzar = get_latest_price("GBPZAR=X")
+        brent = get_latest_price("BZ=F")
+        gold = get_latest_price("GC=F")
+        sp500 = get_latest_price("^GSPC")
 
-    def build(asset):
-        return {
-            "Today": prices[asset],
-            "Change": calculate_percentage(historical[asset]["1d"], prices[asset]),
-            "Monthly": calculate_percentage(historical[asset]["30d"], prices[asset]),
-            "YTD": calculate_percentage(ytd[asset], prices[asset])
+        try:
+            bitcoin_data = cg.get_price(ids="bitcoin", vs_currencies="zar")
+            bitcoin = bitcoin_data["bitcoin"]["zar"]
+        except Exception as e:
+            print(f"⚠️ Bitcoin current price error: {str(e)}")
+            bitcoin = None
+
+        jse_1d = fetch_historical(jse_ticker_used, 1) if jse_ticker_used else None
+        zarusd_1d = fetch_historical("ZAR=X", 1)
+        eurzar_1d = fetch_historical("EURZAR=X", 1)
+        gbpzar_1d = fetch_historical("GBPZAR=X", 1)
+        brent_1d = fetch_historical("BZ=F", 1)
+        gold_1d = fetch_historical("GC=F", 1)
+        sp500_1d = fetch_historical("^GSPC", 1)
+
+        jse_ytd = get_ytd_reference_price(jse_ticker_used) if jse_ticker_used else None
+        zarusd_ytd = get_ytd_reference_price("ZAR=X")
+        eurzar_ytd = get_ytd_reference_price("EURZAR=X")
+        gbpzar_ytd = get_ytd_reference_price("GBPZAR=X")
+        brent_ytd = get_ytd_reference_price("BZ=F")
+        gold_ytd = get_ytd_reference_price("GC=F")
+        sp500_ytd = get_ytd_reference_price("^GSPC")
+        btc_ytd = get_bitcoin_ytd_price(cg)
+
+        usdzar = zarusd
+        usdzar_1d = zarusd_1d
+        usdzar_ytd = zarusd_ytd
+
+        result = {
+            "timestamp": report_time.strftime("%Y-%m-%d %H:%M"),
+            "JSEALSHARE": {
+                "Today": jse,
+                "Change": calculate_percentage(jse_1d, jse),
+                "Monthly": calculate_percentage(fetch_historical(jse_ticker_used, 30), jse) if jse_ticker_used else None,
+                "YTD": calculate_percentage(jse_ytd, jse)
+            },
+            "USDZAR": {
+                "Today": usdzar,
+                "Change": calculate_percentage(usdzar_1d, usdzar),
+                "Monthly": calculate_percentage(fetch_historical("ZAR=X", 30), usdzar),
+                "YTD": calculate_percentage(usdzar_ytd, usdzar)
+            },
+            "EURZAR": {
+                "Today": eurzar,
+                "Change": calculate_percentage(eurzar_1d, eurzar),
+                "Monthly": calculate_percentage(fetch_historical("EURZAR=X", 30), eurzar),
+                "YTD": calculate_percentage(eurzar_ytd, eurzar)
+            },
+            "GBPZAR": {
+                "Today": gbpzar,
+                "Change": calculate_percentage(gbpzar_1d, gbpzar),
+                "Monthly": calculate_percentage(fetch_historical("GBPZAR=X", 30), gbpzar),
+                "YTD": calculate_percentage(gbpzar_ytd, gbpzar)
+            },
+            "BRENT": {
+                "Today": brent,
+                "Change": calculate_percentage(brent_1d, brent),
+                "Monthly": calculate_percentage(fetch_historical("BZ=F", 30), brent),
+                "YTD": calculate_percentage(brent_ytd, brent)
+            },
+            "GOLD": {
+                "Today": gold,
+                "Change": calculate_percentage(gold_1d, gold),
+                "Monthly": calculate_percentage(fetch_historical("GC=F", 30), gold),
+                "YTD": calculate_percentage(gold_ytd, gold)
+            },
+            "SP500": {
+                "Today": sp500,
+                "Change": calculate_percentage(sp500_1d, sp500),
+                "Monthly": calculate_percentage(fetch_historical("^GSPC", 30), sp500),
+                "YTD": calculate_percentage(sp500_ytd, sp500)
+            },
+            "BITCOINZAR": {
+                "Today": bitcoin,
+                "Change": calculate_percentage(fetch_bitcoin_historical(cg, 1), bitcoin),
+                "Monthly": calculate_percentage(fetch_bitcoin_historical(cg, 30), bitcoin),
+                "YTD": calculate_percentage(btc_ytd, bitcoin)
+            }
         }
 
-    return {
-        "timestamp": report_time.strftime("%Y-%m-%d %H:%M"),
-        "JSEALSHARE": build("JSEALSHARE"),
-        "USDZAR": build("USDZAR"),
-        "EURZAR": build("EURZAR"),
-        "GBPZAR": build("GBPZAR"),
-        "BRENT": build("BRENT"),
-        "GOLD": build("GOLD"),
-        "SP500": build("SP500"),
-        "BITCOINZAR": build("BITCOINZAR")
-    }
+        return result
+
+    except Exception as e:
+        print(f"❌ Critical error in fetch_market_data: {str(e)}")
+        return None
+
+if __name__ == "__main__":
+    data = fetch_market_data()
+    if data:
+        print("🚀 Market data fetched successfully:")
+        print(data)
+    else:
+        print("❌ Failed to fetch market data")
