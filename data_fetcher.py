@@ -1,3 +1,4 @@
+
 import yfinance as yf
 from pycoingecko import CoinGeckoAPI
 from datetime import datetime, timezone, timedelta
@@ -5,7 +6,6 @@ import pytz
 from typing import Optional, Dict, Any
 
 def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
-    """Calculate percentage change with null safety and type hints"""
     if None in (old, new) or old == 0:
         return 0.0
     try:
@@ -14,11 +14,13 @@ def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
         return 0.0
 
 def fetch_historical(ticker: str, days: int) -> Optional[float]:
-    """Get historical price accounting for non-trading days using yfinance"""
     try:
-        buffer_days = max(5, days // 5)  # Dynamic buffer
+        buffer_days = max(5, days // 5)
         stock = yf.Ticker(ticker)
-        data = stock.history(period=f"{days + buffer_days}d", interval="1d")
+        data = stock.history(
+            period=f"{days + buffer_days}d",
+            interval="1d"
+        )
         if not data.empty and len(data) >= days + 1:
             return data['Close'].iloc[-days-1]
         return None
@@ -27,7 +29,6 @@ def fetch_historical(ticker: str, days: int) -> Optional[float]:
         return None
 
 def get_ytd_reference_price(ticker: str) -> Optional[float]:
-    """Fetch the first trading day's closing price of the current year"""
     try:
         tkr = yf.Ticker(ticker)
         tz = pytz.timezone('Africa/Johannesburg')
@@ -35,7 +36,11 @@ def get_ytd_reference_price(ticker: str) -> Optional[float]:
         start_date = tz.localize(datetime(now.year, 1, 1))
         end_date = start_date + timedelta(days=30)
         buffer_start = start_date - timedelta(days=14)
-        data = tkr.history(start=buffer_start, end=end_date, interval="1d")
+        data = tkr.history(
+            start=buffer_start,
+            end=end_date,
+            interval="1d"
+        )
         if not data.empty:
             data.index = data.index.tz_convert(tz)
             ytd_data = data[data.index >= start_date]
@@ -52,7 +57,10 @@ def get_bitcoin_ytd_price(cg: CoinGeckoAPI) -> Optional[float]:
         start_date = datetime(current_year, 1, 1, tzinfo=timezone.utc)
         end_date = start_date + timedelta(days=1)
         history = cg.get_coin_market_chart_range_by_id(
-            "bitcoin", "zar", int(start_date.timestamp()), int(end_date.timestamp())
+            "bitcoin",
+            "zar",
+            int(start_date.timestamp()),
+            int(end_date.timestamp())
         )
         return history['prices'][0][1] if history.get('prices') else None
     except Exception as e:
@@ -65,7 +73,10 @@ def fetch_bitcoin_historical(cg: CoinGeckoAPI, days: int) -> Optional[float]:
         target_date = now - timedelta(days=days)
         window = timedelta(hours=12)
         history = cg.get_coin_market_chart_range_by_id(
-            "bitcoin", "zar", int((target_date - window).timestamp()), int((target_date + window).timestamp())
+            "bitcoin",
+            "zar",
+            int((target_date - window).timestamp()),
+            int((target_date + window).timestamp())
         )
         prices = history.get("prices", [])
         if not prices:
@@ -78,18 +89,10 @@ def fetch_bitcoin_historical(cg: CoinGeckoAPI, days: int) -> Optional[float]:
         return None
 
 def get_latest_price(ticker: str) -> Optional[float]:
-    """Helper function to get latest price with error handling"""
     try:
         stock = yf.Ticker(ticker)
         data = stock.history(period="2d", interval="1d")
-        if not data.empty:
-            value = data['Close'].iloc[-1]
-            # Reject suspicious JSE index values
-            if ticker in ["^J203.JO", "J203.JO", "JALSHARES.JO"] and value < 1000:
-                print(f"⚠️ Rejected suspicious JSE value ({value}) from {ticker}")
-                return None
-            return value
-        return None
+        return data['Close'].iloc[-1] if not data.empty else None
     except Exception as e:
         print(f"⚠️ Price fetch error for {ticker}: {str(e)}")
         return None
@@ -98,7 +101,6 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
     cg = CoinGeckoAPI()
     utc_now = datetime.now(timezone.utc)
     sast_time = utc_now.astimezone(timezone(timedelta(hours=2)))
-
     if utc_now.hour == 3:
         report_time = sast_time.replace(hour=5, minute=0)
     elif utc_now.hour == 15:
@@ -107,12 +109,13 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         report_time = sast_time
 
     try:
-        jse_tickers = ["^J203.JO", "J203.JO", "JALSHARES.JO"]
+        jse_tickers = ["STX40.JO"]
         jse = None
         jse_ticker_used = None
         for ticker in jse_tickers:
-            jse = get_latest_price(ticker)
-            if jse is not None:
+            value = get_latest_price(ticker)
+            if value is not None and value > 10:
+                jse = value
                 jse_ticker_used = ticker
                 break
         if jse is None:
