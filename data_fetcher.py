@@ -89,13 +89,16 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         jse = None
         jse_ticker_used = None
         for ticker in jse_tickers:
-            jse = get_latest_price(ticker)
-            if jse is not None:
-                jse_ticker_used = ticker
-                break
+            hist_check = fetch_historical(ticker, 1)
+            if hist_check is not None:
+                latest = get_latest_price(ticker)
+                if latest is not None and latest < 200000:
+                    jse = latest
+                    jse_ticker_used = ticker
+                    break
 
-        if jse is None:
-            print("⚠️ Could not fetch JSE All Share data from any ticker")
+        if jse is None or jse_ticker_used is None:
+            print("⚠️ Could not fetch valid JSE All Share data from any ticker")
             return None
 
         print(f"Using ticker: {jse_ticker_used} for JSE")
