@@ -98,21 +98,34 @@ def fetch_bitcoin_historical(cg: CoinGeckoAPI, days: int) -> Optional[float]:
         return None
 
 def get_latest_price(ticker: str) -> Optional[float]:
-    """Fetch the most reliable ‘latest’ price for equities or indices."""
+    """Fetch the most reliable ‘latest’ price for equities, indices, or currencies."""
     try:
         stock = yf.Ticker(ticker)
+        # 1) Attempt real-time quote
         fast = getattr(stock, "fast_info", {})
         last = fast.get("last_price")
         if last is not None:
             return last
+        # 2) Attempt regularMarketPrice
         info_price = stock.info.get("regularMarketPrice")
         if info_price is not None:
             return info_price
+        # 3) Fallback to history
         df = stock.history(period="7d", interval="1d", auto_adjust=False)
         if not df.empty:
             return df["Close"].iloc[-1]
-        print(f"⚠️ No price data available for {ticker}")
         return None
+    except ValueError as e:
+        # Handle JSON decode errors by retrying once
+        print(f"⚠️ JSON parse error for {ticker}: {e}. Retrying history...")
+        try:
+            df = yf.Ticker(ticker).history(period="7d", interval="1d", auto_adjust=False)
+            if not df.empty:
+                return df["Close"].iloc[-1]
+            return None
+        except Exception as inner:
+            print(f"⚠️ Retry failed for {ticker}: {inner}")
+            return None
     except Exception as e:
         print(f"⚠️ Price fetch error for {ticker}: {e}")
         return None
