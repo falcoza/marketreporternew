@@ -13,18 +13,39 @@ def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
     except (TypeError, ZeroDivisionError):
         return 0.0
 
+
 def fetch_historical(ticker: str, days: int) -> Optional[float]:
-    """Get historical price accounting for non-trading days using yfinance."""
+    """
+    Return the closing price 'days' ago for the given ticker.
+    - days=1: pull a 2-day slice and return the prior close
+    - days=30: pull a 1-month slice and return the first close
+    - otherwise: fall back to buffer-based logic
+    """
     try:
-        buffer_days = max(5, days // 5)
         stock = yf.Ticker(ticker)
-        df = stock.history(period=f"{days + buffer_days}d", interval="1d")
-        if not df.empty and len(df) >= days + 1:
-            return df['Close'].iloc[-days-1]
+
+        if days == 1:
+            df = stock.history(period="2d", interval="1d")
+            if len(df) >= 2:
+                return df['Close'].iloc[-2]
+
+        elif days == 30:
+            df = stock.history(period="1mo", interval="1d")
+            if not df.empty:
+                return df['Close'].iloc[0]
+
+        else:
+            buffer_days = max(5, days // 5)
+            df = stock.history(period=f"{days + buffer_days}d", interval="1d")
+            if len(df) >= days + 1:
+                return df['Close'].iloc[-days-1]
+
         return None
+
     except Exception as e:
-        print(f"⚠️ Historical data error for {ticker}: {e}")
+        print(f"⚠️ Historical data error for {ticker} ({days}d): {e}")
         return None
+
 
 def get_ytd_reference_price(ticker: str) -> Optional[float]:
     """Fetch the first trading day's closing price of the current year."""
@@ -47,6 +68,7 @@ def get_ytd_reference_price(ticker: str) -> Optional[float]:
         print(f"⚠️ YTD reference price error for {ticker}: {e}")
         return None
 
+
 def get_bitcoin_ytd_price(cg: CoinGeckoAPI) -> Optional[float]:
     """Get Bitcoin price on Jan 1 of the current year using CoinGecko."""
     try:
@@ -63,6 +85,7 @@ def get_bitcoin_ytd_price(cg: CoinGeckoAPI) -> Optional[float]:
     except Exception as e:
         print(f"⚠️ Bitcoin YTD error: {e}")
         return None
+
 
 def fetch_bitcoin_historical(cg: CoinGeckoAPI, days: int) -> Optional[float]:
     """Fetch historical Bitcoin price in ZAR."""
@@ -86,6 +109,7 @@ def fetch_bitcoin_historical(cg: CoinGeckoAPI, days: int) -> Optional[float]:
     except Exception as e:
         print(f"⚠️ Bitcoin historical data error for {days} days: {e}")
         return None
+
 
 def get_latest_price(ticker: str) -> Optional[float]:
     """Fetch the most reliable ‘latest’ price for equities or indices."""
@@ -115,6 +139,7 @@ def get_latest_price(ticker: str) -> Optional[float]:
         print(f"⚠️ Price fetch error for {ticker}: {e}")
         return None
 
+
 def fetch_market_data() -> Optional[Dict[str, Any]]:
     """Main function to fetch all market data."""
     cg = CoinGeckoAPI()
@@ -132,20 +157,19 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         report_time = sast_time
 
     try:
-        # **Only** use the FTSE/JSE All‑Share Index
+        # Only use the FTSE/JSE All–Share Index
         jse_tickers = ["^J203.JO"]
         jse = None
         jse_ticker = None
         for tk in jse_tickers:
             price = get_latest_price(tk)
             print(f"[DEBUG] fetched {tk} = {price}")
-            if price is not None:
-                jse = price
+            if price is not None:\n                jse = price
                 jse_ticker = tk
                 break
 
         if jse is None:
-            print("⚠️ Could not fetch JSE All‑Share Index")
+            print("⚠️ Could not fetch JSE All–Share Index")
             return None
 
         # Other markets
