@@ -107,7 +107,6 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
             print("⚠️ Could not fetch JSE All Share data from any ticker")
             return None
 
-        # Fetch forex and commodities
         forex = {k: get_latest_price(k) for k in ["ZAR=X", "EURZAR=X", "GBPZAR=X"]}
         commodities = {k: get_latest_price(k) for k in ["BZ=F", "GC=F"]}
         indices = {"^GSPC": get_latest_price("^GSPC")}
