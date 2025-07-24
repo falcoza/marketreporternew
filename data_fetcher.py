@@ -3,6 +3,8 @@ from pycoingecko import CoinGeckoAPI
 from datetime import datetime, timezone, timedelta
 import pytz
 from typing import Optional, Dict, Any
+import investpy
+
 
 def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
     if None in (old, new) or old == 0:
@@ -12,6 +14,7 @@ def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
     except (TypeError, ZeroDivisionError):
         return 0.0
 
+
 def fetch_historical(ticker: str, days: int) -> Optional[float]:
     try:
         buffer_days = max(20, days * 3)
@@ -19,10 +22,11 @@ def fetch_historical(ticker: str, days: int) -> Optional[float]:
         data = stock.history(period=f"{days + buffer_days}d", interval="1d")
         if len(data) < days + 1:
             return None
-        return data['Close'].iloc[-days-1]
+        return data['Close'].iloc[-days - 1]
     except Exception as e:
         print(f"⚠️ Historical data error for {ticker}: {str(e)}")
         return None
+
 
 def get_ytd_reference_price(ticker: str) -> Optional[float]:
     try:
@@ -43,6 +47,7 @@ def get_ytd_reference_price(ticker: str) -> Optional[float]:
         print(f"⚠️ YTD reference price error for {ticker}: {str(e)}")
         return None
 
+
 def get_bitcoin_ytd_price(cg: CoinGeckoAPI) -> Optional[float]:
     try:
         current_year = datetime.now(timezone.utc).year
@@ -53,6 +58,7 @@ def get_bitcoin_ytd_price(cg: CoinGeckoAPI) -> Optional[float]:
     except Exception as e:
         print(f"⚠️ Bitcoin YTD error: {str(e)}")
         return None
+
 
 def fetch_bitcoin_historical(cg: CoinGeckoAPI, days: int) -> Optional[float]:
     try:
@@ -70,6 +76,7 @@ def fetch_bitcoin_historical(cg: CoinGeckoAPI, days: int) -> Optional[float]:
         print(f"⚠️ Bitcoin historical data error for {days} days: {str(e)}")
         return None
 
+
 def get_latest_price(ticker: str) -> Optional[float]:
     try:
         stock = yf.Ticker(ticker)
@@ -79,29 +86,26 @@ def get_latest_price(ticker: str) -> Optional[float]:
         print(f"⚠️ Price fetch error for {ticker}: {str(e)}")
         return None
 
+
+def fetch_jse_price_investpy() -> Optional[float]:
+    try:
+        data = investpy.get_index_recent_data(index='South Africa 40', country='south africa')
+        return float(data['Close'].iloc[-1]) if not data.empty else None
+    except Exception as e:
+        print(f"⚠️ investpy JSE fetch failed: {str(e)}")
+        return None
+
+
 def fetch_market_data() -> Optional[Dict[str, Any]]:
     cg = CoinGeckoAPI()
     tz = pytz.timezone("Africa/Johannesburg")
     now = datetime.now(tz)
 
     try:
-        jse_tickers = ["^J203.JO", "J203.JO", "JALSHARES.JO"]
-        jse = None
-        jse_ticker_used = None
-        for ticker in jse_tickers:
-            hist_check = fetch_historical(ticker, 1)
-            if hist_check is not None:
-                latest = get_latest_price(ticker)
-                if latest is not None and latest < 200000:
-                    jse = latest
-                    jse_ticker_used = ticker
-                    break
-
-        if jse is None or jse_ticker_used is None:
-            print("⚠️ Could not fetch valid JSE All Share data from any ticker")
+        jse = fetch_jse_price_investpy()
+        if jse is None:
+            print("⚠️ JSE price fetch via investpy failed")
             return None
-
-        print(f"Using ticker: {jse_ticker_used} for JSE")
 
         forex = {k: get_latest_price(k) for k in ["ZAR=X", "EURZAR=X", "GBPZAR=X"]}
         commodities = {k: get_latest_price(k) for k in ["BZ=F", "GC=F"]}
@@ -117,9 +121,9 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
             "timestamp": now.strftime("%Y-%m-%d %H:%M"),
             "JSEALSHARE": {
                 "Today": jse,
-                "Change": calculate_percentage(fetch_historical(jse_ticker_used, 1), jse),
-                "Monthly": calculate_percentage(fetch_historical(jse_ticker_used, 30), jse),
-                "YTD": calculate_percentage(get_ytd_reference_price(jse_ticker_used), jse)
+                "Change": 0.0,  # historical % change patching in next step
+                "Monthly": 0.0,
+                "YTD": 0.0
             },
             "USDZAR": {
                 "Today": forex["ZAR=X"],
@@ -170,6 +174,7 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
     except Exception as e:
         print(f"❌ Critical error in fetch_market_data: {str(e)}")
         return None
+
 
 if __name__ == "__main__":
     data = fetch_market_data()
