@@ -131,4 +131,60 @@ def get_bitcoin_ytd_price(cg: CoinGeckoAPI) -> Optional[float]:
         logging.error(f"Bitcoin YTD error: {e}")
         return None
 
-# Final function fetch_market_data included in follow-up cell
+def fetch_market_data() -> Optional[Dict[str, Any]]:
+    cg = CoinGeckoAPI()
+    utc_now = datetime.now(timezone.utc)
+    sast_time = utc_now.astimezone(timezone(timedelta(hours=2)))
+    report_hour = 17 if sast_time.hour >= 15 else 5
+    report_time = sast_time.replace(hour=report_hour, minute=0, second=0, microsecond=0)
+
+    tickers = {
+        "JSEALSHARE": ["^J203.JO", "J203.JO"],
+        "USDZAR": ["ZAR=X"],
+        "EURZAR": ["EURZAR=X"],
+        "GBPZAR": ["GBPZAR=X"],
+        "BRENT": ["BZ=F"],
+        "GOLD": ["GC=F"],
+        "SP500": ["^GSPC"]
+    }
+
+    prices, historical, ytd = {}, {}, {}
+
+    for key, candidates in tickers.items():
+        value = None
+        for ticker in candidates:
+            value = get_latest_price(ticker)
+            if value: break
+        prices[key] = value
+        hist_1d = fetch_historical(candidates[0], 1)
+        hist_30d = fetch_historical(candidates[0], 30)
+        ytd_price = get_ytd_reference_price(candidates[0])
+        historical[key] = {"1d": hist_1d, "30d": hist_30d}
+        ytd[key] = ytd_price
+
+    prices["BTCZAR"] = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
+    historical["BTCZAR"] = {
+        "1d": fetch_bitcoin_historical(cg, 1),
+        "30d": fetch_bitcoin_historical(cg, 30)
+    }
+    ytd["BTCZAR"] = get_bitcoin_ytd_price(cg)
+
+    def build(asset):
+        return {
+            "Today": prices[asset],
+            "Change": calculate_percentage(historical[asset]["1d"], prices[asset]),
+            "Monthly": calculate_percentage(historical[asset]["30d"], prices[asset]),
+            "YTD": calculate_percentage(ytd[asset], prices[asset])
+        }
+
+    return {
+        "timestamp": report_time.strftime("%Y-%m-%d %H:%M"),
+        "JSEALSHARE": build("JSEALSHARE"),
+        "USDZAR": build("USDZAR"),
+        "EURZAR": build("EURZAR"),
+        "GBPZAR": build("GBPZAR"),
+        "BRENT": build("BRENT"),
+        "GOLD": build("GOLD"),
+        "SP500": build("SP500"),
+        "BTCZAR": build("BTCZAR")
+    }
