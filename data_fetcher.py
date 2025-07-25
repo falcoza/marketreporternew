@@ -3,7 +3,6 @@ from pycoingecko import CoinGeckoAPI
 from datetime import datetime, timezone, timedelta
 import pytz
 from typing import Optional, Dict, Any
-import investpy_reborn as investpy
 
 
 def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
@@ -48,34 +47,6 @@ def get_ytd_reference_price(ticker: str) -> Optional[float]:
         return None
 
 
-def fetch_jse_historical(days: int) -> Optional[float]:
-    try:
-        end_date = datetime.today()
-        start_date = end_date - timedelta(days=days * 2)
-        data = investpy.get_index_historical_data(
-            index='South Africa 40',
-            country='south africa',
-            from_date=start_date.strftime("%d/%m/%Y"),
-            to_date=end_date.strftime("%d/%m/%Y")
-        )
-        return float(data['Close'].iloc[-days - 1]) if len(data) > days else None
-    except Exception as e:
-        print(f"⚠️ investpy JSE historical fetch failed: {str(e)}")
-        return None
-
-
-def get_bitcoin_ytd_price(cg: CoinGeckoAPI) -> Optional[float]:
-    try:
-        current_year = datetime.now(timezone.utc).year
-        start_date = datetime(current_year, 1, 1, tzinfo=timezone.utc)
-        end_date = start_date + timedelta(days=1)
-        history = cg.get_coin_market_chart_range_by_id("bitcoin", "zar", int(start_date.timestamp()), int(end_date.timestamp()))
-        return history['prices'][0][1] if history.get('prices') else None
-    except Exception as e:
-        print(f"⚠️ Bitcoin YTD error: {str(e)}")
-        return None
-
-
 def fetch_bitcoin_historical(cg: CoinGeckoAPI, days: int) -> Optional[float]:
     try:
         now = datetime.now(timezone.utc)
@@ -93,6 +64,18 @@ def fetch_bitcoin_historical(cg: CoinGeckoAPI, days: int) -> Optional[float]:
         return None
 
 
+def get_bitcoin_ytd_price(cg: CoinGeckoAPI) -> Optional[float]:
+    try:
+        current_year = datetime.now(timezone.utc).year
+        start_date = datetime(current_year, 1, 1, tzinfo=timezone.utc)
+        end_date = start_date + timedelta(days=1)
+        history = cg.get_coin_market_chart_range_by_id("bitcoin", "zar", int(start_date.timestamp()), int(end_date.timestamp()))
+        return history['prices'][0][1] if history.get('prices') else None
+    except Exception as e:
+        print(f"⚠️ Bitcoin YTD error: {str(e)}")
+        return None
+
+
 def get_latest_price(ticker: str) -> Optional[float]:
     try:
         stock = yf.Ticker(ticker)
@@ -103,12 +86,17 @@ def get_latest_price(ticker: str) -> Optional[float]:
         return None
 
 
-def fetch_jse_price_investpy() -> Optional[float]:
+def fetch_jse_historical_yf(days: int) -> Optional[float]:
     try:
-        data = investpy.get_index_recent_data(index='South Africa 40', country='south africa')
-        return float(data['Close'].iloc[-1]) if not data.empty else None
+        ticker = "^J203.JO"  # JSE All Share Index
+        buffer_days = max(20, days * 3)
+        stock = yf.Ticker(ticker)
+        data = stock.history(period=f"{days + buffer_days}d", interval="1d")
+        if len(data) < days + 1:
+            return None
+        return data['Close'].iloc[-days - 1]
     except Exception as e:
-        print(f"⚠️ investpy JSE fetch failed: {str(e)}")
+        print(f"⚠️ JSE YF historical fetch failed: {str(e)}")
         return None
 
 
@@ -118,14 +106,10 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
     now = datetime.now(tz)
 
     try:
-        jse = fetch_jse_price_investpy()
-        if jse is None:
-            print("⚠️ JSE price fetch via investpy failed")
-            return None
-
-        jse_1d = fetch_jse_historical(1)
-        jse_30d = fetch_jse_historical(30)
-        jse_ytd = fetch_jse_historical((now - datetime(now.year, 1, 1)).days)
+        jse = get_latest_price("^J203.JO")
+        jse_1d = fetch_jse_historical_yf(1)
+        jse_30d = fetch_jse_historical_yf(30)
+        jse_ytd = fetch_jse_historical_yf((now - datetime(now.year, 1, 1)).days)
 
         forex = {k: get_latest_price(k) for k in ["ZAR=X", "EURZAR=X", "GBPZAR=X"]}
         commodities = {k: get_latest_price(k) for k in ["BZ=F", "GC=F"]}
