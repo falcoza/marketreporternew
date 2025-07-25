@@ -88,7 +88,7 @@ def get_latest_price(ticker: str) -> Optional[float]:
 
 def fetch_jse_historical_yf(days: int) -> Optional[float]:
     try:
-        ticker = "^J203.JO"  # JSE All Share Index
+        ticker = "^J203.JO"
         buffer_days = max(20, days * 3)
         stock = yf.Ticker(ticker)
         data = stock.history(period=f"{days + buffer_days}d", interval="1d")
@@ -104,12 +104,13 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
     cg = CoinGeckoAPI()
     tz = pytz.timezone("Africa/Johannesburg")
     now = datetime.now(tz)
+    start_of_year = tz.localize(datetime(now.year, 1, 1))
 
     try:
         jse = get_latest_price("^J203.JO")
         jse_1d = fetch_jse_historical_yf(1)
         jse_30d = fetch_jse_historical_yf(30)
-        jse_ytd = fetch_jse_historical_yf((now - datetime(now.year, 1, 1)).days)
+        jse_ytd = fetch_jse_historical_yf((now - start_of_year).days)
 
         forex = {k: get_latest_price(k) for k in ["ZAR=X", "EURZAR=X", "GBPZAR=X"]}
         commodities = {k: get_latest_price(k) for k in ["BZ=F", "GC=F"]}
