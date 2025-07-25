@@ -48,6 +48,22 @@ def get_ytd_reference_price(ticker: str) -> Optional[float]:
         return None
 
 
+def fetch_jse_historical(days: int) -> Optional[float]:
+    try:
+        end_date = datetime.today()
+        start_date = end_date - timedelta(days=days * 2)
+        data = investpy.get_index_historical_data(
+            index='South Africa 40',
+            country='south africa',
+            from_date=start_date.strftime("%d/%m/%Y"),
+            to_date=end_date.strftime("%d/%m/%Y")
+        )
+        return float(data['Close'].iloc[-days - 1]) if len(data) > days else None
+    except Exception as e:
+        print(f"⚠️ investpy JSE historical fetch failed: {str(e)}")
+        return None
+
+
 def get_bitcoin_ytd_price(cg: CoinGeckoAPI) -> Optional[float]:
     try:
         current_year = datetime.now(timezone.utc).year
@@ -107,6 +123,10 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
             print("⚠️ JSE price fetch via investpy failed")
             return None
 
+        jse_1d = fetch_jse_historical(1)
+        jse_30d = fetch_jse_historical(30)
+        jse_ytd = fetch_jse_historical((now - datetime(now.year, 1, 1)).days)
+
         forex = {k: get_latest_price(k) for k in ["ZAR=X", "EURZAR=X", "GBPZAR=X"]}
         commodities = {k: get_latest_price(k) for k in ["BZ=F", "GC=F"]}
         indices = {"^GSPC": get_latest_price("^GSPC")}
@@ -121,9 +141,9 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
             "timestamp": now.strftime("%Y-%m-%d %H:%M"),
             "JSEALSHARE": {
                 "Today": jse,
-                "Change": 0.0,
-                "Monthly": 0.0,
-                "YTD": 0.0
+                "Change": calculate_percentage(jse_1d, jse),
+                "Monthly": calculate_percentage(jse_30d, jse),
+                "YTD": calculate_percentage(jse_ytd, jse)
             },
             "USDZAR": {
                 "Today": forex["ZAR=X"],
