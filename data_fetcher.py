@@ -4,31 +4,23 @@ from datetime import datetime, timezone, timedelta
 import pytz
 from typing import Optional, Dict, Any
 import time
-import requests
 
 
-# ---------- shared session for yfinance to reduce empty responses ----------
-_YF_SESSION = requests.Session()
-_YF_SESSION.headers.update({
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"
-})
-
-
-def _retry(n=3, delay=1.0, backoff=2.0):
-    """Simple retry decorator for transient Yahoo/HTTP issues."""
+# ---------- simple retry helper ----------
+def _retry(n=3, delay=0.6, backoff=1.8):
+    """Retry decorator for transient Yahoo/HTTP issues."""
     def deco(fn):
         def wrap(*args, **kwargs):
-            _delay = delay
+            _d = delay
             last_exc = None
             for _ in range(n):
                 try:
                     return fn(*args, **kwargs)
                 except Exception as e:
                     last_exc = e
-                    time.sleep(_delay)
-                    _delay *= backoff
-            # Re-raise last exception to be handled by caller
+                    time.sleep(_d)
+                    _d *= backoff
+            # let caller handle if all retries fail
             raise last_exc
         return wrap
     return deco
@@ -43,11 +35,17 @@ def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
         return 0.0
 
 
-@_retry(n=3, delay=0.6, backoff=1.8)
-def _yf_history(ticker: str, start: Optional[datetime] = None, end: Optional[datetime] = None,
-                period: Optional[str] = None, interval: str = "1d"):
-    """Thin wrapper that always uses our session and supports start/end or period."""
-    tkr = yf.Ticker(ticker, session=_YF_SESSION)
+@_retry()
+def _yf_history(ticker: str,
+                start: Optional[datetime] = None,
+                end: Optional[datetime] = None,
+                period: Optional[str] = None,
+                interval: str = "1d"):
+    """
+    Thin wrapper for yfinance history with retries.
+    Uses either explicit start/end or period.
+    """
+    tkr = yf.Ticker(ticker)
     if start or end:
         return tkr.history(start=start, end=end, interval=interval, auto_adjust=False)
     return tkr.history(period=period or "7d", interval=interval, auto_adjust=False)
@@ -56,21 +54,19 @@ def _yf_history(ticker: str, start: Optional[datetime] = None, end: Optional[dat
 def fetch_historical(ticker: str, days: int) -> Optional[float]:
     """
     Return the closing price 'days' trading days ago for the given ticker.
-    - Primary: use period=(days + buffer)d
-    - Fallback: explicit start/end window with buffer (handles Yahoo 'possibly delisted' empties)
+    Primary: period with large buffer. Fallback: explicit start/end window.
     """
     try:
-        # Primary path - period
-        buffer_days = max(20, days * 3)  # larger buffer to ensure enough trading rows
+        # Primary: period with buffer
+        buffer_days = max(20, days * 3)
         df = _yf_history(ticker, period=f"{days + buffer_days}d", interval="1d")
         if not df.empty and len(df) >= days + 1:
             return float(df["Close"].iloc[-days - 1])
 
-        # Fallback path - explicit dates
-        # Use UTC end to avoid intraday boundary issues; add +1 day to include last session
+        # Fallback: explicit start/end (UTC)
         utc_now = datetime.now(timezone.utc)
-        end = utc_now + timedelta(days=1)
-        start = utc_now - timedelta(days=(days + max(30, days * 4)))  # wider safety window
+        end = utc_now + timedelta(days=1)  # include last session
+        start = utc_now - timedelta(days=(days + max(30, days * 4)))
         df = _yf_history(ticker, start=start, end=end, interval="1d")
         if not df.empty and len(df) >= days + 1:
             return float(df["Close"].iloc[-days - 1])
@@ -91,10 +87,15 @@ def get_ytd_reference_price(ticker: str) -> Optional[float]:
         end_date = start_date + timedelta(days=30)
         buffer_start = start_date - timedelta(days=14)
 
-        df = _yf_history(ticker, start=buffer_start.astimezone(timezone.utc),
-                          end=end_date.astimezone(timezone.utc), interval="1d")
+        # yfinance prefers UTC timestamps for start/end
+        df = _yf_history(
+            ticker,
+            start=buffer_start.astimezone(timezone.utc),
+            end=end_date.astimezone(timezone.utc),
+            interval="1d",
+        )
         if not df.empty:
-            # yfinance returns tz-aware index (UTC); convert to SAST for filtering
+            # Convert to SAST for filtering by calendar boundaries
             df.index = df.index.tz_convert(tz)
             ytd = df[df.index >= start_date]
             if not ytd.empty:
@@ -146,11 +147,10 @@ def get_latest_price(ticker: str) -> Optional[float]:
     1) fast_info.last_price
     2) info['regularMarketPrice']
     3) history(period='2d')
-    4) explicit start/end last 7 days
-    All with retries and a shared session to avoid empty Yahoo responses.
+    4) explicit start/end last ~10 days
     """
     try:
-        tkr = yf.Ticker(ticker, session=_YF_SESSION)
+        tkr = yf.Ticker(ticker)
 
         # 1) fast_info
         try:
@@ -177,7 +177,7 @@ def get_latest_price(ticker: str) -> Optional[float]:
         except Exception:
             pass
 
-        # 4) explicit window last 7 calendar days (UTC end with +1 day)
+        # 4) explicit window last 10 calendar days (UTC)
         utc_now = datetime.now(timezone.utc)
         end = utc_now + timedelta(days=1)
         start = utc_now - timedelta(days=10)
@@ -197,13 +197,13 @@ def fetch_jse_historical_yf(days: int) -> Optional[float]:
     try:
         ticker = "^J203.JO"
 
-        # Primary path - period
+        # Primary: period with buffer
         buffer_days = max(20, days * 3)
         df = _yf_history(ticker, period=f"{days + buffer_days}d", interval="1d")
         if not df.empty and len(df) >= days + 1:
             return float(df["Close"].iloc[-days - 1])
 
-        # Fallback path - explicit dates
+        # Fallback: explicit start/end (UTC)
         utc_now = datetime.now(timezone.utc)
         end = utc_now + timedelta(days=1)
         start = utc_now - timedelta(days=(days + max(30, days * 4)))
@@ -222,7 +222,7 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
     cg = CoinGeckoAPI()
     tz = pytz.timezone("Africa/Johannesburg")
     now = datetime.now(tz)
-    # Make start_of_year tz-aware without localize/naive mismatch
+    # Make start_of_year tz-aware without naive/aware mismatch
     start_of_year = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
 
     try:
