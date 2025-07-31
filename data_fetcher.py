@@ -1,7 +1,7 @@
 import json
 import time
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 
 import pytz
 import requests
@@ -10,39 +10,44 @@ from pycoingecko import CoinGeckoAPI
 from datetime import datetime, timezone, timedelta
 
 
-# ---------------------------- config ----------------------------
-CACHE_FILE = Path("last_good_market_data.json")
-SAST = pytz.timezone("Africa/Johannesburg")
+# ============================== configuration ===============================
 
-# Yahoo primary tickers
+SAST = pytz.timezone("Africa/Johannesburg")
+CACHE_FILE = Path("last_good_market_data.json")
+
+# Primary Yahoo tickers
 TICKERS = {
-    "JSE": "^J203.JO",           # JSE All Share Index (Yahoo)
-    "USDZAR": "ZAR=X",           # USD/ZAR
-    "EURZAR": "EURZAR=X",        # EUR/ZAR
-    "GBPZAR": "GBPZAR=X",        # GBP/ZAR
-    "BRENT": "BZ=F",             # Brent (front-month)
-    "GOLD": "GC=F",              # COMEX Gold (front-month)
-    "SP500": "^GSPC",            # S&P 500 index
+    "JSE": "^J203.JO",      # JSE All Share Index
+    "USDZAR": "ZAR=X",      # USD/ZAR (USD quoted in ZAR)
+    "EURZAR": "EURZAR=X",
+    "GBPZAR": "GBPZAR=X",
+    "BRENT": "BZ=F",        # Brent front-month
+    "GOLD": "GC=F",         # COMEX Gold front-month
+    "SP500": "^GSPC",       # S&P 500 index
 }
 
-# Secondary choices (independent or alternative instruments)
+# Alternative instruments (same provider group) to keep % math coherent
 FALLBACKS = {
-    "JSE": ["STXALJ.JO"],        # ETF proxy for ALSHARE (if index fails)
-    "USDZAR": [],                # independent fallback via exchangerate.host below
+    "JSE": ["STXALJ.JO"],   # ALSI ETF proxy on JSE
+    "USDZAR": [],           # independent FX fallback handled below
     "EURZAR": [],
     "GBPZAR": [],
-    "BRENT": ["CL=F"],           # WTI as a proxy if Brent fails
-    "GOLD": ["XAUUSD=X"],        # spot gold as proxy if futures fail
-    "SP500": ["SPY"],            # ETF proxy
+    "BRENT": ["CL=F"],      # WTI proxy if Brent fails
+    "GOLD": ["XAUUSD=X"],   # spot gold if futures fail
+    "SP500": ["SPY"],       # ETF proxy
 }
 
-# Retry & backoff policy
+# Retry policy for Yahoo calls
 RETRY_ATTEMPTS = 3
 RETRY_DELAY = 0.7
 RETRY_BACKOFF = 1.8
 
+# Trading-session lookback for the “1M” column (≈ 1 month of trading days)
+TRADING_SESSIONS_FOR_MONTH = 22
 
-# --------------------------- small utils ---------------------------
+
+# ============================== small utilities ==============================
+
 def _retry(n=RETRY_ATTEMPTS, delay=RETRY_DELAY, backoff=RETRY_BACKOFF):
     def deco(fn):
         def wrap(*args, **kwargs):
@@ -61,13 +66,24 @@ def _retry(n=RETRY_ATTEMPTS, delay=RETRY_DELAY, backoff=RETRY_BACKOFF):
 
 
 def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
-    # Keep signature & default to avoid breaking the infographic
+    """
+    % change helper kept backward-compatible for your infographic.
+    Returns 0.0 if inputs are missing or old==0.
+    """
     if None in (old, new) or old == 0:
         return 0.0
     try:
         return ((new - old) / old) * 100
     except (TypeError, ZeroDivisionError):
         return 0.0
+
+
+def _save_cache(payload: Dict[str, Any]) -> None:
+    try:
+        with CACHE_FILE.open("w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 def _load_cache() -> Optional[Dict[str, Any]]:
@@ -80,15 +96,8 @@ def _load_cache() -> Optional[Dict[str, Any]]:
     return None
 
 
-def _save_cache(data: Dict[str, Any]) -> None:
-    try:
-        with CACHE_FILE.open("w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+# ============================== Yahoo helpers ================================
 
-
-# ----------------------- Yahoo Finance core ---------------------
 @_retry()
 def _yf_history(ticker: str,
                 start: Optional[datetime] = None,
@@ -96,8 +105,8 @@ def _yf_history(ticker: str,
                 period: Optional[str] = None,
                 interval: str = "1d"):
     """
-    yfinance history with retries; uses either explicit start/end or period.
-    No custom session is passed so yfinance can select its HTTP backend (curl_cffi/httpx).
+    yfinance history with retries (period OR explicit start/end).
+    We do NOT pass a custom session so yfinance can use curl_cffi/httpx.
     """
     tkr = yf.Ticker(ticker)
     if start or end:
@@ -106,11 +115,13 @@ def _yf_history(ticker: str,
 
 
 def _yf_latest_price(ticker: str) -> Optional[float]:
-    """Robust 'latest' from yfinance."""
+    """
+    Robust latest price from yfinance. Tries fast_info, info, then history.
+    """
     try:
         tkr = yf.Ticker(ticker)
 
-        # 1) fast_info
+        # 1) fast_info.last_price
         try:
             fi = getattr(tkr, "fast_info", None)
             last = getattr(fi, "last_price", None) if fi else None
@@ -119,7 +130,7 @@ def _yf_latest_price(ticker: str) -> Optional[float]:
         except Exception:
             pass
 
-        # 2) info regularMarketPrice
+        # 2) info.regularMarketPrice
         try:
             info = getattr(tkr, "info", {}) or {}
             rmp = info.get("regularMarketPrice")
@@ -128,155 +139,183 @@ def _yf_latest_price(ticker: str) -> Optional[float]:
         except Exception:
             pass
 
-        # 3) history(period='2d')
+        # 3) recent history
         try:
-            df = _yf_history(ticker, period="2d", interval="1d")
+            df = _yf_history(ticker, period="5d", interval="1d")
             if not df.empty:
                 return float(df["Close"].iloc[-1])
         except Exception:
             pass
 
-        # 4) explicit window last 10 calendar days (UTC end+1)
+        # 4) explicit 10 calendar days window
         utc_now = datetime.now(timezone.utc)
-        end = utc_now + timedelta(days=1)
-        start = utc_now - timedelta(days=10)
-        df = _yf_history(ticker, start=start, end=end, interval="1d")
+        df = _yf_history(
+            ticker,
+            start=utc_now - timedelta(days=10),
+            end=utc_now + timedelta(days=1),
+            interval="1d",
+        )
         if not df.empty:
             return float(df["Close"].iloc[-1])
 
-        print(f"⚠️ No price data for {ticker} after all Yahoo attempts.")
+        print(f"⚠️ No Yahoo 'Today' for {ticker} after all attempts.")
         return None
     except Exception as e:
         print(f"⚠️ Price fetch error for {ticker}: {e}")
         return None
 
 
-def _yf_historical_close(ticker: str, days: int) -> Optional[float]:
+def _distinct_trading_closes(df, tz=SAST) -> List[Tuple[datetime, float]]:
     """
-    Close 'days' trading days ago via Yahoo (period first; fallback explicit window).
+    Given a daily price DataFrame, return a list of (local_date, close)
+    for distinct trading sessions (no duplicate dates).
     """
-    try:
-        buffer_days = max(20, days * 3)
-        df = _yf_history(ticker, period=f"{days + buffer_days}d", interval="1d")
-        if not df.empty and len(df) >= days + 1:
-            return float(df["Close"].iloc[-days - 1])
+    if df.empty:
+        return []
+    # Ensure timezone awareness
+    idx = df.index
+    if idx.tz is None:
+        df = df.tz_localize("UTC")
+    df = df.tz_convert(tz)
 
-        # fallback explicit
-        utc_now = datetime.now(timezone.utc)
-        end = utc_now + timedelta(days=1)
-        start = utc_now - timedelta(days=(days + max(30, days * 4)))
-        df = _yf_history(ticker, start=start, end=end, interval="1d")
-        if not df.empty and len(df) >= days + 1:
-            return float(df["Close"].iloc[-days - 1])
+    # Group by local date to remove duplicate same-day rows
+    closes = []
+    for d, grp in df.groupby(df.index.date):
+        closes.append((datetime.combine(d, datetime.min.time(), tz), float(grp["Close"].iloc[-1])))
+    return closes
 
-        print(f"⚠️ Historical data empty for {ticker} ({days}d) after Yahoo fallback.")
-        return None
-    except Exception as e:
-        print(f"⚠️ Historical data error for {ticker} ({days}d): {e}")
-        return None
+
+def _yf_last_n_trading_closes(ticker: str, n: int) -> List[Tuple[datetime, float]]:
+    """
+    Fetch enough history to get at least n distinct trading closes.
+    Use period and explicit windows as fallbacks.
+    """
+    # Try a generous period first
+    buffer_days = max(40, int(n * 2.5))
+    df = _yf_history(ticker, period=f"{buffer_days}d", interval="1d")
+    closes = _distinct_trading_closes(df)
+    if len(closes) >= n:
+        return closes[-n:]
+
+    # Fallback explicit window
+    utc_now = datetime.now(timezone.utc)
+    df = _yf_history(
+        ticker,
+        start=utc_now - timedelta(days=buffer_days + 60),
+        end=utc_now + timedelta(days=1),
+        interval="1d",
+    )
+    closes = _distinct_trading_closes(df)
+    return closes[-n:] if len(closes) >= n else closes
+
+
+def _yf_trading_ref_prices(ticker: str) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Returns (prev_trading_close, close_~22_sessions_back).
+    Useful for 1D and "1M" columns based on trading sessions.
+    """
+    arr = _yf_last_n_trading_closes(ticker, TRADING_SESSIONS_FOR_MONTH + 2)
+    if len(arr) < 2:
+        return None, None
+    prev_close = arr[-2][1]
+    month_back_idx = max(0, len(arr) - (TRADING_SESSIONS_FOR_MONTH + 1))
+    month_back_close = arr[month_back_idx][1] if month_back_idx < len(arr) else None
+    return prev_close, month_back_close
 
 
 def _yf_ytd_first_close(ticker: str, tz=SAST) -> Optional[float]:
-    """First trading day's close of the current year using Yahoo."""
+    """
+    First trading close of current year (for the SAME instrument).
+    """
     try:
         now = datetime.now(tz)
         start_date = datetime(now.year, 1, 1, tzinfo=tz)
-        end_date = start_date + timedelta(days=30)
-        buffer_start = start_date - timedelta(days=14)
-
+        end_date = start_date + timedelta(days=40)
         df = _yf_history(
             ticker,
-            start=buffer_start.astimezone(timezone.utc),
+            start=start_date.astimezone(timezone.utc) - timedelta(days=10),
             end=end_date.astimezone(timezone.utc),
             interval="1d",
         )
-        if not df.empty:
-            df.index = df.index.tz_convert(tz)
-            ytd = df[df.index >= start_date]
-            if not ytd.empty:
-                return float(ytd["Close"].iloc[0])
+        closes = _distinct_trading_closes(df, tz)
+        # pick first close ON or AFTER Jan 1
+        for d, px in closes:
+            if d >= start_date:
+                return float(px)
         return None
     except Exception as e:
         print(f"⚠️ YTD reference price error for {ticker}: {e}")
         return None
 
 
-# ------------------------- FX fallback (exchangerate.host) -------------------------
+# =========================== FX fallback provider ============================
+
 def _fx_latest_exhost(base: str, quote: str) -> Optional[float]:
-    """
-    Latest FX via exchangerate.host (no key).
-    Returns price as QUOTE per BASE (e.g., USD/ZAR when base='USD', quote='ZAR').
-    """
     try:
-        url = "https://api.exchangerate.host/latest"
-        r = requests.get(url, params={"base": base, "symbols": quote}, timeout=10)
+        r = requests.get("https://api.exchangerate.host/latest",
+                         params={"base": base, "symbols": quote},
+                         timeout=10)
         r.raise_for_status()
         data = r.json()
-        rate = data.get("rates", {}).get(quote)
-        return float(rate) if rate is not None else None
+        return float(data.get("rates", {}).get(quote))
     except Exception as e:
         print(f"⚠️ FX latest fallback error {base}/{quote}: {e}")
         return None
 
 
 def _fx_on_date_exhost(date: datetime, base: str, quote: str) -> Optional[float]:
-    """
-    FX rate on a specific date via exchangerate.host (uses date endpoint).
-    """
     try:
-        ds = date.strftime("%Y-%m-%d")
-        url = f"https://api.exchangerate.host/{ds}"
-        r = requests.get(url, params={"base": base, "symbols": quote}, timeout=10)
+        r = requests.get(f"https://api.exchangerate.host/{date.strftime('%Y-%m-%d')}",
+                         params={"base": base, "symbols": quote},
+                         timeout=10)
         r.raise_for_status()
         data = r.json()
-        rate = data.get("rates", {}).get(quote)
-        return float(rate) if rate is not None else None
+        return float(data.get("rates", {}).get(quote))
     except Exception as e:
-        print(f"⚠️ FX date fallback error {base}/{quote} {date}: {e}")
+        print(f"⚠️ FX date fallback error {base}/{quote} {date.date()}: {e}")
         return None
 
 
-# ------------------------------ Domain fetchers -----------------------------------
-def _pick_today_and_instrument(primary: str, fallbacks: Tuple[str, ...]) -> Tuple[Optional[str], Optional[float]]:
+def _fx_bundle_consistent(yahoo_ticker: str, base: str, quote: str,
+                          use_yahoo_if_possible: bool = True) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
     """
-    Decide which instrument to use for *this metric* based on who returns Today.
-    Returns (chosen_ticker, today_price).
+    Returns a tuple (today, prev_trading, ~1m_trading, ytd_first) from a single provider chain.
     """
-    p = _yf_latest_price(primary)
-    if p is not None:
-        return primary, p
-    for alt in fallbacks:
-        p = _yf_latest_price(alt)
-        if p is not None:
-            print(f"ℹ️ Using fallback instrument {alt} for {primary}.")
-            return alt, p
-    return None, None
+    now = datetime.now(SAST)
+    start_of_year = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    if use_yahoo_if_possible:
+        today = _yf_latest_price(yahoo_ticker)
+        if today is not None:
+            prev, mback = _yf_trading_ref_prices(yahoo_ticker)
+            ytd = _yf_ytd_first_close(yahoo_ticker)
+            return today, prev, mback, ytd
+
+    # Independent fallback: exchangerate.host for all refs
+    today = _fx_latest_exhost(base, quote)
+    # approx previous trading (yesterday UTC) – FX is 24/5; this is an acceptable proxy
+    prev = _fx_on_date_exhost(now - timedelta(days=1), base, quote)
+    # ~1 month back by calendar (OK for FX)
+    mback = _fx_on_date_exhost(now - timedelta(days=30), base, quote)
+    ytd = _fx_on_date_exhost(start_of_year, base, quote)
+    if today is not None:
+        print(f"ℹ️ Using exchangerate.host for {base}/{quote}.")
+    return today, prev, mback, ytd
 
 
-def _hist_same_instrument(chosen: Optional[str], days: int) -> Optional[float]:
-    if not chosen:
-        return None
-    return _yf_historical_close(chosen, days)
+# ============================== Bitcoin helpers ==============================
 
-
-def _ytd_same_instrument(chosen: Optional[str]) -> Optional[float]:
-    if not chosen:
-        return None
-    return _yf_ytd_first_close(chosen)
-
-
-# -------------------------------- Bitcoin helpers -----------------------------------
 def fetch_bitcoin_historical(cg: CoinGeckoAPI, days: int) -> Optional[float]:
     try:
         now = datetime.now(timezone.utc)
         target = now - timedelta(days=days)
         window = timedelta(hours=12)
-        history = cg.get_coin_market_chart_range_by_id(
+        hist = cg.get_coin_market_chart_range_by_id(
             "bitcoin", "zar",
             int((target - window).timestamp()),
             int((target + window).timestamp())
         )
-        prices = history.get("prices", [])
+        prices = hist.get("prices", [])
         if not prices:
             return None
         target_ms = target.timestamp() * 1000
@@ -292,153 +331,150 @@ def get_bitcoin_ytd_price(cg: CoinGeckoAPI) -> Optional[float]:
         year = datetime.now(timezone.utc).year
         start = datetime(year, 1, 1, tzinfo=timezone.utc)
         end = start + timedelta(days=1)
-        history = cg.get_coin_market_chart_range_by_id("bitcoin", "zar", int(start.timestamp()), int(end.timestamp()))
-        return float(history["prices"][0][1]) if history.get("prices") else None
+        hist = cg.get_coin_market_chart_range_by_id("bitcoin", "zar", int(start.timestamp()), int(end.timestamp()))
+        return float(hist["prices"][0][1]) if hist.get("prices") else None
     except Exception as e:
         print(f"⚠️ Bitcoin YTD error: {e}")
         return None
 
 
-# -------------------------------- main API ---------------------------------------
+# =============================== main assembly ===============================
+
+def _choose_instrument_for_today(primary: str, fallbacks: Tuple[str, ...]) -> Tuple[Optional[str], Optional[float]]:
+    """
+    Pick one instrument for the metric and stick to it for all refs.
+    """
+    p = _yf_latest_price(primary)
+    if p is not None:
+        return primary, p
+    for alt in fallbacks:
+        p = _yf_latest_price(alt)
+        if p is not None:
+            print(f"ℹ️ Using fallback instrument {alt} for {primary}.")
+            return alt, p
+    return None, None
+
+
+def _trading_refs_for_instrument(ticker: Optional[str]) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """
+    Returns (prev_close, ~1m_back_close, ytd_first_close) for a chosen instrument.
+    """
+    if not ticker:
+        return None, None, None
+    prev, mback = _yf_trading_ref_prices(ticker)
+    ytd = _yf_ytd_first_close(ticker)
+    return prev, mback, ytd
+
+
 def fetch_market_data() -> Optional[Dict[str, Any]]:
     cg = CoinGeckoAPI()
     now = datetime.now(SAST)
-    start_of_year = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
 
     try:
-        # ---------- JSE ----------
-        jse_ticker, jse_today = _pick_today_and_instrument(TICKERS["JSE"], tuple(FALLBACKS["JSE"]))
-        jse_1d = _hist_same_instrument(jse_ticker, 1)
-        jse_30d = _hist_same_instrument(jse_ticker, 30)
-        jse_ytd = _ytd_same_instrument(jse_ticker)
-        if jse_ytd is None and jse_ticker:
-            days_from_ytd = (now - start_of_year).days
-            jse_ytd = _yf_historical_close(jse_ticker, days_from_ytd)
+        # ------------------- JSE (single instrument chain) -------------------
+        jse_tkr, jse_today = _choose_instrument_for_today(TICKERS["JSE"], tuple(FALLBACKS["JSE"]))
+        jse_prev, jse_mback, jse_ytd = _trading_refs_for_instrument(jse_tkr)
 
-        # ---------- FX (choose provider per pair; if Yahoo fails, use exchangerate.host for all refs) ----------
-        def fx_bundle(yahoo_ticker: str, base: str, quote: str) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
-            today_y = _yf_latest_price(yahoo_ticker)
-            if today_y is not None:
-                # Use Yahoo for all refs if possible (same provider)
-                d1 = _yf_historical_close(yahoo_ticker, 1)
-                d30 = _yf_historical_close(yahoo_ticker, 30)
-                ytdref = _yf_ytd_first_close(yahoo_ticker)
-                return today_y, d1, d30, ytdref
-            # Fallback: exchangerate.host for everything
-            today_e = _fx_latest_exhost(base, quote)
-            d1_e = _fx_on_date_exhost(now - timedelta(days=1), base, quote)
-            d30_e = _fx_on_date_exhost(now - timedelta(days=30), base, quote)
-            ytd_e = _fx_on_date_exhost(start_of_year, base, quote)
-            if today_e is not None:
-                print(f"ℹ️ Using exchangerate.host for {base}/{quote}.")
-            return today_e, d1_e, d30_e, ytd_e
+        # ------------------- FX (provider-consistent bundle) -----------------
+        usdzar_today, usdzar_prev, usdzar_mback, usdzar_ytd = _fx_bundle_consistent(TICKERS["USDZAR"], "USD", "ZAR")
+        eurzar_today, eurzar_prev, eurzar_mback, eurzar_ytd = _fx_bundle_consistent(TICKERS["EURZAR"], "EUR", "ZAR")
+        gbpzar_today, gbpzar_prev, gbpzar_mback, gbpzar_ytd = _fx_bundle_consistent(TICKERS["GBPZAR"], "GBP", "ZAR")
 
-        usdzar_today, usdzar_1d, usdzar_30d, usdzar_ytd = fx_bundle(TICKERS["USDZAR"], "USD", "ZAR")
-        eurzar_today, eurzar_1d, eurzar_30d, eurzar_ytd = fx_bundle(TICKERS["EURZAR"], "EUR", "ZAR")
-        gbpzar_today, gbpzar_1d, gbpzar_30d, gbpzar_ytd = fx_bundle(TICKERS["GBPZAR"], "GBP", "ZAR")
+        # ------------------- Commodities (stick to one instrument) ----------
+        brent_tkr, brent_today = _choose_instrument_for_today(TICKERS["BRENT"], tuple(FALLBACKS["BRENT"]))
+        brent_prev, brent_mback, brent_ytd = _trading_refs_for_instrument(brent_tkr)
 
-        # ---------- Commodities ----------
-        brent_ticker, brent_today = _pick_today_and_instrument(TICKERS["BRENT"], tuple(FALLBACKS["BRENT"]))
-        brent_1d = _hist_same_instrument(brent_ticker, 1)
-        brent_30d = _hist_same_instrument(brent_ticker, 30)
-        brent_ytd = _ytd_same_instrument(brent_ticker)
+        gold_tkr, gold_today = _choose_instrument_for_today(TICKERS["GOLD"], tuple(FALLBACKS["GOLD"]))
+        gold_prev, gold_mback, gold_ytd = _trading_refs_for_instrument(gold_tkr)
 
-        gold_ticker, gold_today = _pick_today_and_instrument(TICKERS["GOLD"], tuple(FALLBACKS["GOLD"]))
-        gold_1d = _hist_same_instrument(gold_ticker, 1)
-        gold_30d = _hist_same_instrument(gold_ticker, 30)
-        gold_ytd = _ytd_same_instrument(gold_ticker)
+        # ------------------- S&P 500 (index or ETF, but consistent) ---------
+        sp_tkr, sp_today = _choose_instrument_for_today(TICKERS["SP500"], tuple(FALLBACKS["SP500"]))
+        sp_prev, sp_mback, sp_ytd = _trading_refs_for_instrument(sp_tkr)
 
-        # ---------- S&P 500 ----------
-        sp_ticker, sp_today = _pick_today_and_instrument(TICKERS["SP500"], tuple(FALLBACKS["SP500"]))
-        sp_1d = _hist_same_instrument(sp_ticker, 1)
-        sp_30d = _hist_same_instrument(sp_ticker, 30)
-        sp_ytd = _ytd_same_instrument(sp_ticker)
-
-        # ---------- Bitcoin (ZAR) ----------
+        # ------------------- Bitcoin (CoinGecko) ----------------------------
         try:
             btc_now = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
         except Exception:
             btc_now = None
-        btc_1d = fetch_bitcoin_historical(cg, 1)
-        btc_30d = fetch_bitcoin_historical(cg, 30)
+        btc_prev = fetch_bitcoin_historical(cg, 1)
+        btc_mback = fetch_bitcoin_historical(cg, 30)   # ~month calendar; OK for 24/7 BTC
         btc_ytd = get_bitcoin_ytd_price(cg)
 
-        # ---------- Assemble ----------
+        # ------------------- Assemble payload --------------------------------
         results: Dict[str, Any] = {
             "timestamp": now.strftime("%Y-%m-%d %H:%M"),
             "JSEALSHARE": {
                 "Today": jse_today,
-                "Change": calculate_percentage(jse_1d, jse_today),
-                "Monthly": calculate_percentage(jse_30d, jse_today),
+                "Change": calculate_percentage(jse_prev, jse_today),
+                "Monthly": calculate_percentage(jse_mback, jse_today),
                 "YTD": calculate_percentage(jse_ytd, jse_today),
             },
             "USDZAR": {
                 "Today": usdzar_today,
-                "Change": calculate_percentage(usdzar_1d, usdzar_today),
-                "Monthly": calculate_percentage(usdzar_30d, usdzar_today),
+                "Change": calculate_percentage(usdzar_prev, usdzar_today),
+                "Monthly": calculate_percentage(usdzar_mback, usdzar_today),
                 "YTD": calculate_percentage(usdzar_ytd, usdzar_today),
             },
             "EURZAR": {
                 "Today": eurzar_today,
-                "Change": calculate_percentage(eurzar_1d, eurzar_today),
-                "Monthly": calculate_percentage(eurzar_30d, eurzar_today),
+                "Change": calculate_percentage(eurzar_prev, eurzar_today),
+                "Monthly": calculate_percentage(eurzar_mback, eurzar_today),
                 "YTD": calculate_percentage(eurzar_ytd, eurzar_today),
             },
             "GBPZAR": {
                 "Today": gbpzar_today,
-                "Change": calculate_percentage(gbpzar_1d, gbpzar_today),
-                "Monthly": calculate_percentage(gbpzar_30d, gbpzar_today),
+                "Change": calculate_percentage(gbpzar_prev, gbpzar_today),
+                "Monthly": calculate_percentage(gbpzar_mback, gbpzar_today),
                 "YTD": calculate_percentage(gbpzar_ytd, gbpzar_today),
             },
             "BRENT": {
                 "Today": brent_today,
-                "Change": calculate_percentage(brent_1d, brent_today),
-                "Monthly": calculate_percentage(brent_30d, brent_today),
+                "Change": calculate_percentage(brent_prev, brent_today),
+                "Monthly": calculate_percentage(brent_mback, brent_today),
                 "YTD": calculate_percentage(brent_ytd, brent_today),
             },
             "GOLD": {
                 "Today": gold_today,
-                "Change": calculate_percentage(gold_1d, gold_today),
-                "Monthly": calculate_percentage(gold_30d, gold_today),
+                "Change": calculate_percentage(gold_prev, gold_today),
+                "Monthly": calculate_percentage(gold_mback, gold_today),
                 "YTD": calculate_percentage(gold_ytd, gold_today),
             },
             "SP500": {
                 "Today": sp_today,
-                "Change": calculate_percentage(sp_1d, sp_today),
-                "Monthly": calculate_percentage(sp_30d, sp_today),
+                "Change": calculate_percentage(sp_prev, sp_today),
+                "Monthly": calculate_percentage(sp_mback, sp_today),
                 "YTD": calculate_percentage(sp_ytd, sp_today),
             },
             "BITCOINZAR": {
                 "Today": btc_now,
-                "Change": calculate_percentage(btc_1d, btc_now),
-                "Monthly": calculate_percentage(btc_30d, btc_now),
+                "Change": calculate_percentage(btc_prev, btc_now),
+                "Monthly": calculate_percentage(btc_mback, btc_now),
                 "YTD": calculate_percentage(btc_ytd, btc_now),
             },
         }
 
-        # save last-known-good if we have “Today” for key lines
+        # ------------------- Cache handling ----------------------------------
+        # Save last-known-good if core Today values exist; otherwise fill from cache.
         core_ok = all(results[k]["Today"] is not None for k in ["JSEALSHARE", "USDZAR", "EURZAR", "GBPZAR"])
         if core_ok:
             _save_cache(results)
         else:
-            # fill “Today” gaps from cache if available
             cache = _load_cache()
             if cache:
                 for key, sec in results.items():
-                    if isinstance(sec, dict) and "Today" in sec and sec["Today"] is None:
-                        cached_val = cache.get(key, {}).get("Today")
-                        if cached_val is not None:
-                            sec["Today"] = cached_val
+                    if isinstance(sec, dict) and sec.get("Today") is None:
+                        cached = cache.get(key, {}).get("Today")
+                        if cached is not None:
+                            sec["Today"] = cached
 
         return results
 
     except Exception as e:
         print(f"❌ Critical error in fetch_market_data: {e}")
-        cache = _load_cache()
-        return cache
+        return _load_cache()
 
 
-# ------------------------------- dev runner --------------------------------
+# ============================== dev runner ==================================
 if __name__ == "__main__":
     data = fetch_market_data()
     if data:
