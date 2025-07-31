@@ -1,3 +1,4 @@
+# data_fetcher.py
 import json
 import time
 from pathlib import Path
@@ -173,12 +174,10 @@ def _distinct_trading_closes(df, tz=SAST) -> List[Tuple[datetime, float]]:
     if df.empty:
         return []
     # Ensure timezone awareness
-    idx = df.index
-    if idx.tz is None:
+    if df.index.tz is None:
         df = df.tz_localize("UTC")
     df = df.tz_convert(tz)
 
-    # Group by local date to remove duplicate same-day rows
     closes = []
     for d, grp in df.groupby(df.index.date):
         closes.append((datetime.combine(d, datetime.min.time(), tz), float(grp["Close"].iloc[-1])))
@@ -190,7 +189,6 @@ def _yf_last_n_trading_closes(ticker: str, n: int) -> List[Tuple[datetime, float
     Fetch enough history to get at least n distinct trading closes.
     Use period and explicit windows as fallbacks.
     """
-    # Try a generous period first
     buffer_days = max(40, int(n * 2.5))
     df = _yf_history(ticker, period=f"{buffer_days}d", interval="1d")
     closes = _distinct_trading_closes(df)
@@ -238,7 +236,6 @@ def _yf_ytd_first_close(ticker: str, tz=SAST) -> Optional[float]:
             interval="1d",
         )
         closes = _distinct_trading_closes(df, tz)
-        # pick first close ON or AFTER Jan 1
         for d, px in closes:
             if d >= start_date:
                 return float(px)
@@ -279,7 +276,7 @@ def _fx_on_date_exhost(date: datetime, base: str, quote: str) -> Optional[float]
 def _fx_bundle_consistent(yahoo_ticker: str, base: str, quote: str,
                           use_yahoo_if_possible: bool = True) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
     """
-    Returns a tuple (today, prev_trading, ~1m_trading, ytd_first) from a single provider chain.
+    Returns (today, prev_trading, ~1m_trading, ytd_first) from a single provider chain.
     """
     now = datetime.now(SAST)
     start_of_year = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -291,11 +288,9 @@ def _fx_bundle_consistent(yahoo_ticker: str, base: str, quote: str,
             ytd = _yf_ytd_first_close(yahoo_ticker)
             return today, prev, mback, ytd
 
-    # Independent fallback: exchangerate.host for all refs
+    # Independent fallback: exchangerate.host for everything
     today = _fx_latest_exhost(base, quote)
-    # approx previous trading (yesterday UTC) – FX is 24/5; this is an acceptable proxy
     prev = _fx_on_date_exhost(now - timedelta(days=1), base, quote)
-    # ~1 month back by calendar (OK for FX)
     mback = _fx_on_date_exhost(now - timedelta(days=30), base, quote)
     ytd = _fx_on_date_exhost(start_of_year, base, quote)
     if today is not None:
@@ -405,8 +400,8 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
             "timestamp": now.strftime("%Y-%m-%d %H:%M"),
             "JSEALSHARE": {
                 "Today": jse_today,
-                "Change": calculate_percentage(jse_prev, jse_today),
-                "Monthly": calculate_percentage(jse_mback, jse_today),
+                "Change": calculate_percentage(jse_prev, jse_today),      # 1D%
+                "Monthly": calculate_percentage(jse_mback, jse_today),    # 1M%
                 "YTD": calculate_percentage(jse_ytd, jse_today),
             },
             "USDZAR": {
@@ -454,7 +449,6 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         }
 
         # ------------------- Cache handling ----------------------------------
-        # Save last-known-good if core Today values exist; otherwise fill from cache.
         core_ok = all(results[k]["Today"] is not None for k in ["JSEALSHARE", "USDZAR", "EURZAR", "GBPZAR"])
         if core_ok:
             _save_cache(results)
