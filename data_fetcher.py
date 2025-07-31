@@ -42,7 +42,7 @@ RETRY_DELAY = 0.7
 RETRY_BACKOFF = 1.8
 
 
-# --------------------------- helpers ---------------------------
+# --------------------------- small utils ---------------------------
 def _retry(n=RETRY_ATTEMPTS, delay=RETRY_DELAY, backoff=RETRY_BACKOFF):
     def deco(fn):
         def wrap(*args, **kwargs):
@@ -61,12 +61,31 @@ def _retry(n=RETRY_ATTEMPTS, delay=RETRY_DELAY, backoff=RETRY_BACKOFF):
 
 
 def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
+    # Keep signature & default to avoid breaking the infographic
     if None in (old, new) or old == 0:
         return 0.0
     try:
         return ((new - old) / old) * 100
     except (TypeError, ZeroDivisionError):
         return 0.0
+
+
+def _load_cache() -> Optional[Dict[str, Any]]:
+    try:
+        if CACHE_FILE.exists():
+            with CACHE_FILE.open("r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return None
+
+
+def _save_cache(data: Dict[str, Any]) -> None:
+    try:
+        with CACHE_FILE.open("w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 # ----------------------- Yahoo Finance core ---------------------
@@ -189,7 +208,7 @@ def _fx_latest_exhost(base: str, quote: str) -> Optional[float]:
     Returns price as QUOTE per BASE (e.g., USD/ZAR when base='USD', quote='ZAR').
     """
     try:
-        url = f"https://api.exchangerate.host/latest"
+        url = "https://api.exchangerate.host/latest"
         r = requests.get(url, params={"base": base, "symbols": quote}, timeout=10)
         r.raise_for_status()
         data = r.json()
@@ -217,87 +236,36 @@ def _fx_on_date_exhost(date: datetime, base: str, quote: str) -> Optional[float]
         return None
 
 
-# ---------------------------- Cache (last-known-good) -----------------------------
-def _load_cache() -> Optional[Dict[str, Any]]:
-    try:
-        if CACHE_FILE.exists():
-            with CACHE_FILE.open("r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return None
-
-
-def _save_cache(data: Dict[str, Any]) -> None:
-    try:
-        with CACHE_FILE.open("w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
-
 # ------------------------------ Domain fetchers -----------------------------------
-def _get_price_with_fallback(primary: str, fallbacks: Tuple[str, ...] = ()) -> Optional[float]:
+def _pick_today_and_instrument(primary: str, fallbacks: Tuple[str, ...]) -> Tuple[Optional[str], Optional[float]]:
     """
-    Try Yahoo primary ticker first, then Yahoo alternative instruments.
+    Decide which instrument to use for *this metric* based on who returns Today.
+    Returns (chosen_ticker, today_price).
     """
-    # Yahoo primary
-    price = _yf_latest_price(primary)
-    if price is not None:
-        return price
-    # Yahoo instrument fallbacks
+    p = _yf_latest_price(primary)
+    if p is not None:
+        return primary, p
     for alt in fallbacks:
-        price = _yf_latest_price(alt)
-        if price is not None:
-            print(f"ℹ️ Used fallback instrument {alt} for {primary}.")
-            return price
-    return None
-
-
-def _get_fx_pair_with_fallback(yahoo_ticker: str, base: str, quote: str) -> Optional[float]:
-    """
-    For FX series, use Yahoo first; if that fails, use exchangerate.host.
-    Note: yahoo_ticker should be 'ZAR=X' for USD/ZAR (i.e., USDZAR).
-    """
-    y = _yf_latest_price(yahoo_ticker)
-    if y is not None:
-        return y
-    # Independent fallback
-    ex = _fx_latest_exhost(base, quote)
-    if ex is not None:
-        print(f"ℹ️ Used exchangerate.host for {base}/{quote}.")
-        return ex
-    return None
-
-
-def _get_hist_with_fallback(ticker: str, days: int, alt_tickers: Tuple[str, ...] = ()) -> Optional[float]:
-    """
-    Historical 'days' ago via Yahoo; if empty for primary, try alternative instruments.
-    """
-    p = _yf_historical_close(ticker, days)
-    if p is not None:
-        return p
-    for alt in alt_tickers:
-        p = _yf_historical_close(alt, days)
+        p = _yf_latest_price(alt)
         if p is not None:
-            print(f"ℹ️ Used fallback instrument {alt} ({days}d) for {ticker}.")
-            return p
-    return None
+            print(f"ℹ️ Using fallback instrument {alt} for {primary}.")
+            return alt, p
+    return None, None
 
 
-def _get_ytd_with_fallback(ticker: str, alt_tickers: Tuple[str, ...] = ()) -> Optional[float]:
-    p = _yf_ytd_first_close(ticker)
-    if p is not None:
-        return p
-    for alt in alt_tickers:
-        p = _yf_ytd_first_close(alt)
-        if p is not None:
-            print(f"ℹ️ Used fallback instrument {alt} (YTD) for {ticker}.")
-            return p
-    return None
+def _hist_same_instrument(chosen: Optional[str], days: int) -> Optional[float]:
+    if not chosen:
+        return None
+    return _yf_historical_close(chosen, days)
 
 
-# ------------------------------ Bitcoin helpers -----------------------------------
+def _ytd_same_instrument(chosen: Optional[str]) -> Optional[float]:
+    if not chosen:
+        return None
+    return _yf_ytd_first_close(chosen)
+
+
+# -------------------------------- Bitcoin helpers -----------------------------------
 def fetch_bitcoin_historical(cg: CoinGeckoAPI, days: int) -> Optional[float]:
     try:
         now = datetime.now(timezone.utc)
@@ -339,63 +307,56 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
 
     try:
         # ---------- JSE ----------
-        jse_today = _get_price_with_fallback(TICKERS["JSE"], tuple(FALLBACKS["JSE"]))
-        jse_1d = _get_hist_with_fallback(TICKERS["JSE"], 1, tuple(FALLBACKS["JSE"]))
-        jse_30d = _get_hist_with_fallback(TICKERS["JSE"], 30, tuple(FALLBACKS["JSE"]))
-        jse_ytd = _get_ytd_with_fallback(TICKERS["JSE"], tuple(FALLBACKS["JSE"]))
-        if jse_ytd is None:
-            # last resort: compute days since year start if we at least have JSE history
+        jse_ticker, jse_today = _pick_today_and_instrument(TICKERS["JSE"], tuple(FALLBACKS["JSE"]))
+        jse_1d = _hist_same_instrument(jse_ticker, 1)
+        jse_30d = _hist_same_instrument(jse_ticker, 30)
+        jse_ytd = _ytd_same_instrument(jse_ticker)
+        if jse_ytd is None and jse_ticker:
             days_from_ytd = (now - start_of_year).days
-            jse_ytd = _get_hist_with_fallback(TICKERS["JSE"], days_from_ytd, tuple(FALLBACKS["JSE"]))
+            jse_ytd = _yf_historical_close(jse_ticker, days_from_ytd)
 
-        # ---------- FX ----------
-        usdzar_today = _get_fx_pair_with_fallback(TICKERS["USDZAR"], "USD", "ZAR")
-        eurzar_today = _get_fx_pair_with_fallback(TICKERS["EURZAR"], "EUR", "ZAR")
-        gbpzar_today = _get_fx_pair_with_fallback(TICKERS["GBPZAR"], "GBP", "ZAR")
+        # ---------- FX (choose provider per pair; if Yahoo fails, use exchangerate.host for all refs) ----------
+        def fx_bundle(yahoo_ticker: str, base: str, quote: str) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
+            today_y = _yf_latest_price(yahoo_ticker)
+            if today_y is not None:
+                # Use Yahoo for all refs if possible (same provider)
+                d1 = _yf_historical_close(yahoo_ticker, 1)
+                d30 = _yf_historical_close(yahoo_ticker, 30)
+                ytdref = _yf_ytd_first_close(yahoo_ticker)
+                return today_y, d1, d30, ytdref
+            # Fallback: exchangerate.host for everything
+            today_e = _fx_latest_exhost(base, quote)
+            d1_e = _fx_on_date_exhost(now - timedelta(days=1), base, quote)
+            d30_e = _fx_on_date_exhost(now - timedelta(days=30), base, quote)
+            ytd_e = _fx_on_date_exhost(start_of_year, base, quote)
+            if today_e is not None:
+                print(f"ℹ️ Using exchangerate.host for {base}/{quote}.")
+            return today_e, d1_e, d30_e, ytd_e
 
-        # Historical for FX: Yahoo first, then exchangerate.host on-date
-        def fx_hist(pair_ticker: str, base: str, quote: str, days: int) -> Optional[float]:
-            v = _yf_historical_close(pair_ticker, days)
-            if v is not None:
-                return v
-            date = now - timedelta(days=days)
-            v = _fx_on_date_exhost(date=date, base=base, quote=quote)
-            if v is not None:
-                print(f"ℹ️ Used exchangerate.host for {base}/{quote} ({days}d).")
-            return v
-
-        usdzar_1d = fx_hist(TICKERS["USDZAR"], "USD", "ZAR", 1)
-        usdzar_30d = fx_hist(TICKERS["USDZAR"], "USD", "ZAR", 30)
-        usdzar_ytd_ref = _yf_ytd_first_close(TICKERS["USDZAR"]) or _fx_on_date_exhost(start_of_year, "USD", "ZAR")
-
-        eurzar_1d = fx_hist(TICKERS["EURZAR"], "EUR", "ZAR", 1)
-        eurzar_30d = fx_hist(TICKERS["EURZAR"], "EUR", "ZAR", 30)
-        eurzar_ytd_ref = _yf_ytd_first_close(TICKERS["EURZAR"]) or _fx_on_date_exhost(start_of_year, "EUR", "ZAR")
-
-        gbpzar_1d = fx_hist(TICKERS["GBPZAR"], "GBP", "ZAR", 1)
-        gbpzar_30d = fx_hist(TICKERS["GBPZAR"], "GBP", "ZAR", 30)
-        gbpzar_ytd_ref = _yf_ytd_first_close(TICKERS["GBPZAR"]) or _fx_on_date_exhost(start_of_year, "GBP", "ZAR")
+        usdzar_today, usdzar_1d, usdzar_30d, usdzar_ytd = fx_bundle(TICKERS["USDZAR"], "USD", "ZAR")
+        eurzar_today, eurzar_1d, eurzar_30d, eurzar_ytd = fx_bundle(TICKERS["EURZAR"], "EUR", "ZAR")
+        gbpzar_today, gbpzar_1d, gbpzar_30d, gbpzar_ytd = fx_bundle(TICKERS["GBPZAR"], "GBP", "ZAR")
 
         # ---------- Commodities ----------
-        brent_today = _get_price_with_fallback(TICKERS["BRENT"], tuple(FALLBACKS["BRENT"]))
-        brent_1d = _get_hist_with_fallback(TICKERS["BRENT"], 1, tuple(FALLBACKS["BRENT"]))
-        brent_30d = _get_hist_with_fallback(TICKERS["BRENT"], 30, tuple(FALLBACKS["BRENT"]))
-        brent_ytd = _get_ytd_with_fallback(TICKERS["BRENT"], tuple(FALLBACKS["BRENT"]))
+        brent_ticker, brent_today = _pick_today_and_instrument(TICKERS["BRENT"], tuple(FALLBACKS["BRENT"]))
+        brent_1d = _hist_same_instrument(brent_ticker, 1)
+        brent_30d = _hist_same_instrument(brent_ticker, 30)
+        brent_ytd = _ytd_same_instrument(brent_ticker)
 
-        gold_today = _get_price_with_fallback(TICKERS["GOLD"], tuple(FALLBACKS["GOLD"]))
-        gold_1d = _get_hist_with_fallback(TICKERS["GOLD"], 1, tuple(FALLBACKS["GOLD"]))
-        gold_30d = _get_hist_with_fallback(TICKERS["GOLD"], 30, tuple(FALLBACKS["GOLD"]))
-        gold_ytd = _get_ytd_with_fallback(TICKERS["GOLD"], tuple(FALLBACKS["GOLD"]))
+        gold_ticker, gold_today = _pick_today_and_instrument(TICKERS["GOLD"], tuple(FALLBACKS["GOLD"]))
+        gold_1d = _hist_same_instrument(gold_ticker, 1)
+        gold_30d = _hist_same_instrument(gold_ticker, 30)
+        gold_ytd = _ytd_same_instrument(gold_ticker)
 
         # ---------- S&P 500 ----------
-        sp_today = _get_price_with_fallback(TICKERS["SP500"], tuple(FALLBACKS["SP500"]))
-        sp_1d = _get_hist_with_fallback(TICKERS["SP500"], 1, tuple(FALLBACKS["SP500"]))
-        sp_30d = _get_hist_with_fallback(TICKERS["SP500"], 30, tuple(FALLBACKS["SP500"]))
-        sp_ytd = _get_ytd_with_fallback(TICKERS["SP500"], tuple(FALLBACKS["SP500"]))
+        sp_ticker, sp_today = _pick_today_and_instrument(TICKERS["SP500"], tuple(FALLBACKS["SP500"]))
+        sp_1d = _hist_same_instrument(sp_ticker, 1)
+        sp_30d = _hist_same_instrument(sp_ticker, 30)
+        sp_ytd = _ytd_same_instrument(sp_ticker)
 
         # ---------- Bitcoin (ZAR) ----------
         try:
-            btc_now = CoinGeckoAPI().get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
+            btc_now = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
         except Exception:
             btc_now = None
         btc_1d = fetch_bitcoin_historical(cg, 1)
@@ -415,19 +376,19 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
                 "Today": usdzar_today,
                 "Change": calculate_percentage(usdzar_1d, usdzar_today),
                 "Monthly": calculate_percentage(usdzar_30d, usdzar_today),
-                "YTD": calculate_percentage(usdzar_ytd_ref, usdzar_today),
+                "YTD": calculate_percentage(usdzar_ytd, usdzar_today),
             },
             "EURZAR": {
                 "Today": eurzar_today,
                 "Change": calculate_percentage(eurzar_1d, eurzar_today),
                 "Monthly": calculate_percentage(eurzar_30d, eurzar_today),
-                "YTD": calculate_percentage(eurzar_ytd_ref, eurzar_today),
+                "YTD": calculate_percentage(eurzar_ytd, eurzar_today),
             },
             "GBPZAR": {
                 "Today": gbpzar_today,
                 "Change": calculate_percentage(gbpzar_1d, gbpzar_today),
                 "Monthly": calculate_percentage(gbpzar_30d, gbpzar_today),
-                "YTD": calculate_percentage(gbpzar_ytd_ref, gbpzar_today),
+                "YTD": calculate_percentage(gbpzar_ytd, gbpzar_today),
             },
             "BRENT": {
                 "Today": brent_today,
@@ -455,12 +416,12 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
             },
         }
 
-        # save last-known-good if we have at least “Today” values for core series
+        # save last-known-good if we have “Today” for key lines
         core_ok = all(results[k]["Today"] is not None for k in ["JSEALSHARE", "USDZAR", "EURZAR", "GBPZAR"])
         if core_ok:
             _save_cache(results)
         else:
-            # use cache to fill gaps if available (without overwriting any fresh values)
+            # fill “Today” gaps from cache if available
             cache = _load_cache()
             if cache:
                 for key, sec in results.items():
@@ -468,6 +429,7 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
                         cached_val = cache.get(key, {}).get("Today")
                         if cached_val is not None:
                             sec["Today"] = cached_val
+
         return results
 
     except Exception as e:
