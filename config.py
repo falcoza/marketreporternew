@@ -5,11 +5,7 @@ from datetime import datetime
 EMAIL_SENDER = "ypanchia@gmail.com"
 EMAIL_PASSWORD = os.getenv("GITHUBACTIONS_PASSWORD")
 EMAIL_RECEIVERS = [
-    "yeshiel@dailymaverick.co.za",
-    "neesa@dailymaverick.co.za",
-    "lisakanya@dailymaverick.co.za",
-    "kara@dailymaverick.co.za",
-    "lindsey@dailymaverick.co.za"
+    "yeshiel@dailymaverick.co.za"
 ]
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
