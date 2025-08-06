@@ -2,8 +2,8 @@ import os
 from datetime import datetime
 
 # Email Configuration
-EMAIL_SENDER = "ypanchia@gmail.com"
-EMAIL_PASSWORD = os.getenv("GITHUBACTIONS_PASSWORD")
+EMAIL_SENDER = "yeshiel@dailymaverick.co.za"
+EMAIL_PASSWORD = os.getenv("MarketReport")
 EMAIL_RECEIVERS = [
     "yeshiel@dailymaverick.co.za"
 ]
