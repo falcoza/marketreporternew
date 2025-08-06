@@ -10,7 +10,7 @@ EMAIL_RECEIVERS = [
     "lisakanya@dailymaverick.co.za",
     "kara@dailymaverick.co.za",
     "lindsey@dailymaverick.co.za",
-    "bm@dailymaverick.co.za
+    "bm@dailymaverick.co.za"
 ]
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
