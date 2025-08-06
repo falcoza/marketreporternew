@@ -1,100 +1,24 @@
+from datetime import datetime, timedelta
 import yfinance as yf
 from pycoingecko import CoinGeckoAPI
-from datetime import datetime, timedelta, timezone
 import pytz
 
-cg = CoinGeckoAPI()
-tz = pytz.timezone("Africa/Johannesburg")
-
-def get_price_change(current, previous):
-    return round(((current - previous) / previous) * 100, 1)
-
-def fetch_from_yahoo(ticker, date_1d, date_1m, date_ytd, date_current):
-    try:
-        data = yf.download(
-            ticker,
-            start=date_ytd.strftime('%Y-%m-%d'),
-            end=(date_current + timedelta(days=1)).strftime('%Y-%m-%d'),
-            progress=False
-        )
-
-        if 'Adj Close' not in data.columns:
-            raise KeyError(f"Adj Close not found for {ticker}")
-
-        series = data['Adj Close']
-
-        price_today = series.loc[series.index <= date_current][-1]
-        price_1d = series.loc[series.index <= date_1d][-1]
-        price_1m = series.loc[series.index <= date_1m][-1]
-        price_ytd = series.loc[series.index <= date_ytd][-1]
-
-        return {
-            "Today": round(price_today, 2),
-            "Change": get_price_change(price_today, price_1d),
-            "Monthly": get_price_change(price_today, price_1m),
-            "YTD": get_price_change(price_today, price_ytd),
-        }
-
-    except Exception as e:
-        print(f"❌ Error fetching {ticker} from Yahoo: {e}")
-        return None
-
-def fetch_from_coingecko(id, vs_currency, target_date):
-    try:
-        window = timedelta(hours=12)
-        history = cg.get_coin_market_chart_range_by_id(
-            id, vs_currency,
-            int((target_date - window).timestamp()),
-            int((target_date + window).timestamp())
-        )
-        prices = history.get("prices", [])
-        closest = min(prices, key=lambda x: abs(x[0]/1000 - target_date.timestamp()))
-        return closest[1]
-    except Exception as e:
-        print(f"❌ Error fetching {id} from CoinGecko: {e}")
-        return None
-
-def fetch_bitcoin_zar(date_1d, date_1m, date_ytd, date_current):
-    try:
-        today_price = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
-        price_1d = fetch_from_coingecko("bitcoin", "zar", date_1d)
-        price_1m = fetch_from_coingecko("bitcoin", "zar", date_1m)
-        price_ytd = fetch_from_coingecko("bitcoin", "zar", date_ytd)
-
-        return {
-            "Today": round(today_price, 0),
-            "Change": get_price_change(today_price, price_1d),
-            "Monthly": get_price_change(today_price, price_1m),
-            "YTD": get_price_change(today_price, price_ytd)
-        }
-    except Exception as e:
-        raise RuntimeError(f"Bitcoin ZAR fetch failed: {e}")
-
-def fetch_gold_zar(date_1d, date_1m, date_ytd, date_current):
-    try:
-        gold_today = fetch_from_coingecko("gold", "zar", date_current)
-        gold_1d = fetch_from_coingecko("gold", "zar", date_1d)
-        gold_1m = fetch_from_coingecko("gold", "zar", date_1m)
-        gold_ytd = fetch_from_coingecko("gold", "zar", date_ytd)
-
-        return {
-            "Today": round(gold_today, 0),
-            "Change": get_price_change(gold_today, gold_1d),
-            "Monthly": get_price_change(gold_today, gold_1m),
-            "YTD": get_price_change(gold_today, gold_ytd)
-        }
-    except Exception as e:
-        raise RuntimeError(f"Gold ZAR fetch failed: {e}")
+# Helper function to extract closing prices with fallback
+def get_price_column(data):
+    if "Adj Close" in data.columns:
+        return data["Adj Close"]
+    elif "Close" in data.columns:
+        return data["Close"]
+    else:
+        raise KeyError("Neither 'Adj Close' nor 'Close' found in data")
 
 def fetch_market_data():
     try:
-        now = datetime.now(tz)
-        date_current = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        date_1d = date_current - timedelta(days=1)
-        date_1m = date_current - timedelta(days=30)
+        tz = pytz.timezone("Africa/Johannesburg")
+        date_current = datetime.now(tz)
         date_ytd = datetime(date_current.year, 1, 1, tzinfo=tz)
-
-        result = {}
+        date_1mo = date_current - timedelta(days=30)
+        date_1d = date_current - timedelta(days=1)
 
         tickers = {
             "JSEALSHARE": "^J203.JO",
@@ -105,18 +29,70 @@ def fetch_market_data():
             "SP500": "^GSPC"
         }
 
+        data_dict = {}
         for key, ticker in tickers.items():
-            data = fetch_from_yahoo(ticker, date_1d, date_1m, date_ytd, date_current)
-            if not data:
-                raise RuntimeError(f"Failed to fetch valid data for {key}")
-            result[key] = data
+            try:
+                data = yf.download(
+                    ticker,
+                    start=date_ytd.strftime('%Y-%m-%d'),
+                    end=(date_current + timedelta(days=1)).strftime('%Y-%m-%d'),
+                    progress=False
+                )
 
-        result["BITCOINZAR"] = fetch_bitcoin_zar(date_1d, date_1m, date_ytd, date_current)
-        result["GOLD"] = fetch_gold_zar(date_1d, date_1m, date_ytd, date_current)
+                price_col = get_price_column(data)
 
-        result["timestamp"] = now.strftime("%Y-%m-%d %H:%M")
-        return result
+                today = price_col[-1]
+                prev = price_col[price_col.index < price_col.index[-1]][-1]
+                month = price_col[price_col.index >= date_1mo.strftime('%Y-%m-%d')][0]
+                ytd = price_col[0]
+
+                data_dict[key] = {
+                    "Today": float(today),
+                    "Change": ((today - prev) / prev) * 100,
+                    "Monthly": ((today - month) / month) * 100,
+                    "YTD": ((today - ytd) / ytd) * 100,
+                }
+            except Exception as e:
+                print(f"❌ Error fetching {ticker} from Yahoo: {e}")
+                raise ValueError(f"Failed to fetch valid data for {key}")
+
+        # CoinGecko for crypto + gold
+        cg = CoinGeckoAPI()
+
+        # Bitcoin price in ZAR
+        btc_price = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
+        btc_history = cg.get_coin_market_chart_range_by_id(
+            id="bitcoin",
+            vs_currency="zar",
+            from_timestamp=int(date_ytd.timestamp()),
+            to_timestamp=int(date_current.timestamp())
+        )["prices"]
+
+        btc_prices = [p[1] for p in btc_history]
+        btc_ytd = btc_prices[0]
+        btc_1mo = btc_prices[max(0, len(btc_prices) - 30)]
+        btc_1d = btc_prices[-2]
+        btc_today = btc_prices[-1]
+
+        data_dict["BITCOINZAR"] = {
+            "Today": btc_today,
+            "Change": ((btc_today - btc_1d) / btc_1d) * 100,
+            "Monthly": ((btc_today - btc_1mo) / btc_1mo) * 100,
+            "YTD": ((btc_today - btc_ytd) / btc_ytd) * 100,
+        }
+
+        # Gold price from CoinGecko (only today's value)
+        gold_price = cg.get_price(ids="gold", vs_currencies="zar")["gold"]["zar"]
+        data_dict["GOLD"] = {
+            "Today": gold_price,
+            "Change": 0.0,
+            "Monthly": 0.0,
+            "YTD": 0.0,
+        }
+
+        data_dict["timestamp"] = date_current.strftime('%Y-%m-%d')
+        return data_dict
 
     except Exception as e:
-        print(f"❌ Critical error in fetch_market_data: {e}")
+        print(f"❌ Critical error in fetch_market_data: {str(e)}")
         return None
