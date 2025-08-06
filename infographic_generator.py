@@ -9,8 +9,8 @@ def generate_infographic(data):
         georgia_bold = ImageFont.truetype(FONT_PATHS['georgia_bold'], 20)
         footer_font = ImageFont.truetype(FONT_PATHS['georgia'], 16)
 
-        # Create canvas (reduced height from 550 to 500)
-        img = Image.new("RGB", (520, 500), THEME['background'])
+        # Create canvas (reduced height from 500 to 460)
+        img = Image.new("RGB", (520, 460), THEME['background'])
         draw = ImageDraw.Draw(img)
 
         # Header Section
@@ -98,26 +98,17 @@ def generate_infographic(data):
 
             y_position += 34
 
-        # Disclaimer: All values are in rands (centered)
-        disclaimer_text = "All values are stated in rands"
-        disclaimer_width = footer_font.getlength(disclaimer_text)
-        draw.text(
-            ((520 - disclaimer_width) // 2, y_position + 10),
-            disclaimer_text,
-            font=footer_font,
-            fill="#666666"
-        )
-
-        # Footer (bottom-right aligned)
-        footer_text = "Data: Yahoo Finance, CoinGecko"
+        # Combined disclaimer + data source (centered under last row)
+        footer_text = "All values are stated in rands · Data: Yahoo Finance, CoinGecko"
         footer_width = footer_font.getlength(footer_text)
         draw.text(
-            (520 - footer_width - 15, y_position + 35),
+            ((520 - footer_width) // 2, y_position + 15),
             footer_text,
             font=footer_font,
             fill="#666666"
         )
 
+        # Save infographic
         filename = f"Market_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.png"
         img.save(filename)
         return filename
