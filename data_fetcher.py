@@ -42,16 +42,16 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         for label, symbol in tickers.items():
             try:
                 ticker = yf.Ticker(symbol)
-                hist = ticker.history(start=ytd_start, end=now.strftime('%Y-%m-%d'))
+                hist = ticker.history(period="5d", interval="1d")  # Changed to ensure clean daily data
 
                 if hist.empty:
                     print(f"⚠️ No data for {label} ({symbol})")
                     continue
 
-                today_val = hist["Close"][-1]
-                day_ago_val = ticker.history(period="2d", interval="1d")["Close"].iloc[0]  # Force daily bars
-                month_ago_val = hist["Close"].loc[one_month_ago] if one_month_ago in hist["Close"] else None
-                ytd_val = hist["Close"].iloc[0]
+                today_val = hist["Close"].iloc[-1]
+                day_ago_val = hist["Close"].iloc[-2]  # Now reliably gets previous close
+                month_ago_val = hist["Close"].iloc[-30] if len(hist) >= 30 else None
+                ytd_val = ticker.history(start=ytd_start)["Close"].iloc[0]
 
                 data[label] = {
                     "Today": float(today_val),
