@@ -49,7 +49,7 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
                     continue
 
                 today_val = hist["Close"][-1]
-                day_ago_val = hist["Close"].iloc[-2] if len(hist["Close"]) > 1 else None
+                day_ago_val = ticker.history(period="2d")["Close"].iloc[0]  # FIXED LINE
                 month_ago_val = hist["Close"].loc[one_month_ago] if one_month_ago in hist["Close"] else None
                 ytd_val = hist["Close"].iloc[0]
 
