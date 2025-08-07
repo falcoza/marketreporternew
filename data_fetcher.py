@@ -42,36 +42,23 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         for label, symbol in tickers.items():
             try:
                 ticker = yf.Ticker(symbol)
-
-                # Use a wider 5-day window to ensure two valid points
-                hist = ticker.history(period="5d")
+                hist = ticker.history(start=ytd_start, end=now.strftime('%Y-%m-%d'))
 
                 if hist.empty:
                     print(f"⚠️ No data for {label} ({symbol})")
                     continue
 
-                closes = hist["Close"].dropna()
-
-                if len(closes) < 2:
-                    print(f"⚠️ Not enough data points for {label}")
-                    continue
-
-                today_val = closes[-1]
-                prev_val = closes[-2]
-
-                # For monthly and YTD, use explicit date-based history
-                long_hist = ticker.history(start=ytd_start, end=today_str)
-                long_closes = long_hist["Close"].dropna()
-                month_ago_val = long_closes.loc[one_month_ago] if one_month_ago in long_closes.index.strftime('%Y-%m-%d') else None
-                ytd_val = long_closes.iloc[0] if not long_closes.empty else None
+                today_val = hist["Close"][-1]
+                day_ago_val = hist["Close"].iloc[-2] if len(hist["Close"]) > 1 else None
+                month_ago_val = hist["Close"].loc[one_month_ago] if one_month_ago in hist["Close"] else None
+                ytd_val = hist["Close"].iloc[0]
 
                 data[label] = {
                     "Today": float(today_val),
-                    "Change": calculate_percentage(prev_val, today_val),
+                    "Change": calculate_percentage(day_ago_val, today_val),
                     "Monthly": calculate_percentage(month_ago_val, today_val),
                     "YTD": calculate_percentage(ytd_val, today_val)
                 }
-
             except Exception as e:
                 print(f"⚠️ Error fetching {label}: {e}")
                 continue
@@ -82,3 +69,34 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
             btc_data = cg.get_coin_market_chart_range_by_id(
                 id='bitcoin',
                 vs_currency='zar',
+                from_timestamp=int(datetime.strptime(ytd_start, "%Y-%m-%d").timestamp()),
+                to_timestamp=int(now.timestamp())
+            )
+
+            prices = btc_data['prices']
+            if not prices:
+                raise ValueError("Empty BTC price data")
+
+            btc_today = prices[-1][1]
+            btc_day_ago = next((p[1] for p in prices if datetime.fromtimestamp(p[0] / 1000, sa_tz).date() == (now - timedelta(days=1)).date()), None)
+            btc_month_ago = next((p[1] for p in prices if datetime.fromtimestamp(p[0] / 1000, sa_tz).date() == (now - timedelta(days=30)).date()), None)
+            btc_ytd = prices[0][1]
+
+            data["BITCOINZAR"] = {
+                "Today": float(btc_today),
+                "Change": calculate_percentage(btc_day_ago, btc_today),
+                "Monthly": calculate_percentage(btc_month_ago, btc_today),
+                "YTD": calculate_percentage(btc_ytd, btc_today)
+            }
+
+        except Exception as e:
+            print(f"⚠️ Error fetching BTC data: {e}")
+
+        # Add timestamp
+        data["timestamp"] = now.strftime("%d %b %Y, %H:%M")
+
+        return data
+
+    except Exception as e:
+        print(f"❌ Critical error in fetch_market_data: {str(e)}")
+        return None
