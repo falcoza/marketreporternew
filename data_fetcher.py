@@ -1,10 +1,10 @@
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 import pytz
+import yfinance as yf
+from pycoingecko import CoinGeckoAPI
 from typing import Optional, Dict, Any
-from PIL import Image, ImageDraw, ImageFont
-from config import *
 
-# -- Percentage calculation helper --
+# Helper: Calculate percentage change safely
 def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
     if None in (old, new) or old == 0:
         return 0.0
@@ -13,126 +13,90 @@ def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
     except (TypeError, ZeroDivisionError):
         return 0.0
 
-# -- Infographic Generator --
-def generate_infographic(data):
+# Core fetcher function
+def fetch_market_data() -> Optional[Dict[str, Any]]:
     try:
-        # Load Georgia fonts with fallback
-        georgia = ImageFont.truetype(FONT_PATHS['georgia'], 18)
-        georgia_bold = ImageFont.truetype(FONT_PATHS['georgia_bold'], 20)
-        footer_font = ImageFont.truetype(FONT_PATHS['georgia'], 16)
+        # Timezone setup
+        sa_tz = pytz.timezone("Africa/Johannesburg")
+        now = datetime.now(sa_tz)
+        today_str = now.strftime('%Y-%m-%d')
 
-        # Create canvas (reduced height)
-        img = Image.new("RGB", (520, 500), THEME['background'])
-        draw = ImageDraw.Draw(img)
+        # Date ranges
+        one_day_ago = (now - timedelta(days=1)).strftime('%Y-%m-%d')
+        one_month_ago = (now - timedelta(days=30)).strftime('%Y-%m-%d')
+        ytd_start = datetime(now.year, 1, 1).strftime('%Y-%m-%d')
 
-        # Header
-        header_text = f"Market Report {data['timestamp']}"
-        header_width = georgia_bold.getlength(header_text)
-        draw.text(
-            ((520 - header_width) // 2, 15),
-            header_text,
-            font=georgia_bold,
-            fill=THEME['text']
-        )
+        # Yahoo tickers
+        tickers = {
+            "JSEALSHARE": "^J203.JO",
+            "USDZAR": "USDZAR=X",
+            "EURZAR": "EURZAR=X",
+            "GBPZAR": "GBPZAR=X",
+            "BRENT": "BZ=F",
+            "GOLD": "GC=F",
+            "SP500": "^GSPC"
+        }
 
-        # Table Headers
-        y_position = 60
-        x_position = 25
-        for col_name, col_width in REPORT_COLUMNS:
-            draw.rectangle(
-                [(x_position, y_position), (x_position + col_width, y_position + 30)],
-                fill=THEME['header']
+        data = {}
+
+        for label, symbol in tickers.items():
+            try:
+                ticker = yf.Ticker(symbol)
+                hist = ticker.history(start=ytd_start, end=today_str)
+
+                if hist.empty:
+                    print(f"⚠️ No data for {label} ({symbol})")
+                    continue
+
+                today_val = hist["Close"][-1]
+                day_ago_val = hist["Close"].iloc[-2] if len(hist["Close"]) > 1 else None
+                month_ago_val = hist["Close"].loc[one_month_ago] if one_month_ago in hist["Close"] else None
+                ytd_val = hist["Close"].iloc[0]
+
+                data[label] = {
+                    "Today": float(today_val),
+                    "Change": calculate_percentage(day_ago_val, today_val),
+                    "Monthly": calculate_percentage(month_ago_val, today_val),
+                    "YTD": calculate_percentage(ytd_val, today_val)
+                }
+            except Exception as e:
+                print(f"⚠️ Error fetching {label}: {e}")
+                continue
+
+        # Crypto from CoinGecko
+        try:
+            cg = CoinGeckoAPI()
+            btc_data = cg.get_coin_market_chart_range_by_id(
+                id='bitcoin',
+                vs_currency='zar',
+                from_timestamp=int(datetime.strptime(ytd_start, "%Y-%m-%d").timestamp()),
+                to_timestamp=int(now.timestamp())
             )
-            text_width = georgia_bold.getlength(col_name)
-            draw.text(
-                (x_position + (col_width - text_width) // 2, y_position + 5),
-                col_name,
-                font=georgia_bold,
-                fill="white"
-            )
-            x_position += col_width
 
-        # Data Rows
-        y_position = 90
-        metrics = [
-            ("JSE All Share", data["JSEALSHARE"]),
-            ("USD/ZAR", data["USDZAR"]),
-            ("EUR/ZAR", data["EURZAR"]),
-            ("GBP/ZAR", data["GBPZAR"]),
-            ("Brent Crude", data["BRENT"]),
-            ("Gold", data["GOLD"]),
-            ("S&P 500", data["SP500"]),
-            ("Bitcoin ZAR", data["BITCOINZAR"])
-        ]
+            prices = btc_data['prices']
+            if not prices:
+                raise ValueError("Empty BTC price data")
 
-        for idx, (metric_name, values) in enumerate(metrics):
-            x_position = 25
-            bg_color = "#F5F5F5" if idx % 2 == 0 else THEME['background']
+            btc_today = prices[-1][1]
+            btc_day_ago = next((p[1] for p in prices if datetime.fromtimestamp(p[0]/1000, sa_tz).date() == (now - timedelta(days=1)).date()), None)
+            btc_month_ago = next((p[1] for p in prices if datetime.fromtimestamp(p[0]/1000, sa_tz).date() == (now - timedelta(days=30)).date()), None)
+            btc_ytd = prices[0][1]
 
-            draw.rectangle(
-                [(25, y_position), (520 - 25, y_position + 34)],
-                fill=bg_color
-            )
+            data["BITCOINZAR"] = {
+                "Today": float(btc_today),
+                "Change": calculate_percentage(btc_day_ago, btc_today),
+                "Monthly": calculate_percentage(btc_month_ago, btc_today),
+                "YTD": calculate_percentage(btc_ytd, btc_today)
+            }
 
-            # Metric Name
-            draw.text(
-                (x_position + 5, y_position + 5),
-                metric_name,
-                font=georgia,
-                fill=THEME['text']
-            )
-            x_position += REPORT_COLUMNS[0][1]
+        except Exception as e:
+            print(f"⚠️ Error fetching BTC data: {e}")
 
-            # Today’s Value
-            today_val = values["Today"]
-            today_text = f"{today_val:,.0f}" if today_val > 1000 else f"{today_val:,.2f}"
-            draw.text(
-                (x_position + 5, y_position + 5),
-                today_text,
-                font=georgia,
-                fill=THEME['text']
-            )
-            x_position += REPORT_COLUMNS[1][1]
+        # Add timestamp
+        data["timestamp"] = now.strftime("%d %b %Y, %H:%M")
 
-            # Percentage values
-            for period in ["Change", "Monthly", "YTD"]:
-                value = values[period]
-                color = THEME['positive'] if value >= 0 else THEME['negative']
-                text = f"{value:+.1f}%"
-                text_width = georgia.getlength(text)
-                draw.text(
-                    (x_position + (REPORT_COLUMNS[2][1] - text_width) // 2, y_position + 5),
-                    text,
-                    font=georgia,
-                    fill=color
-                )
-                x_position += REPORT_COLUMNS[2][1]
-
-            y_position += 34
-
-        # Disclaimer (left-aligned)
-        disclaimer_text = "All values are stated in rands"
-        draw.text(
-            (25, y_position + 10),
-            disclaimer_text,
-            font=footer_font,
-            fill="#666666"
-        )
-
-        # Footer (bottom-right aligned)
-        footer_text = "Data: Yahoo Finance, CoinGecko"
-        footer_width = footer_font.getlength(footer_text)
-        draw.text(
-            (520 - footer_width - 15, y_position + 35),
-            footer_text,
-            font=footer_font,
-            fill="#666666"
-        )
-
-        filename = f"Market_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.png"
-        img.save(filename)
-        return filename
+        return data
 
     except Exception as e:
-        print(f"❌ Critical error in generate_infographic: {str(e)}")
+        print(f"❌ Critical error in fetch_market_data: {str(e)}")
         return None
