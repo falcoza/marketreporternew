@@ -14,34 +14,55 @@ def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
         return 0.0
 
 def fetch_historical(ticker: str, days: int) -> Optional[float]:
+    """Return the closest available closing price for 'days' ago."""
     try:
         buffer_days = max(20, days * 3)
         stock = yf.Ticker(ticker)
         data = stock.history(period=f"{days + buffer_days}d", interval="1d")
-        if data.empty or len(data) < days + 1:
+        if data.empty:
             return None
-        return data['Close'].iloc[-days - 1]
+        target_date = (datetime.now() - timedelta(days=days)).date()
+        filtered = data[data.index.date <= target_date]
+        if filtered.empty:
+            return None
+        return filtered['Close'].iloc[-1]
     except Exception as e:
         print(f"⚠️ Historical data error for {ticker}: {str(e)}")
         return None
 
 def get_ytd_reference_price(ticker: str) -> Optional[float]:
+    """Return the first available trading price from the start of the year."""
     try:
-        tkr = yf.Ticker(ticker)
-        tz = pytz.timezone('Africa/Johannesburg')
+        tz = pytz.timezone("Africa/Johannesburg")
         now = datetime.now(tz)
-        start_date = tz.localize(datetime(now.year, 1, 1))
-        end_date = start_date + timedelta(days=30)
-        buffer_start = start_date - timedelta(days=14)
-        data = tkr.history(start=buffer_start, end=end_date, interval="1d")
-        if not data.empty:
-            data.index = data.index.tz_convert(tz)
-            ytd_data = data[data.index >= start_date]
-            if not ytd_data.empty:
-                return ytd_data['Close'].iloc[0]
-        return None
+        start_of_year = tz.localize(datetime(now.year, 1, 1))
+        buffer_start = start_of_year - timedelta(days=14)
+        buffer_end = start_of_year + timedelta(days=31)
+
+        stock = yf.Ticker(ticker)
+        data = stock.history(start=buffer_start, end=buffer_end, interval="1d")
+        if data.empty:
+            return None
+
+        data.index = data.index.tz_convert(tz)
+        ytd_data = data[data.index >= start_of_year]
+        if ytd_data.empty:
+            return None
+
+        return ytd_data['Close'].iloc[0]
     except Exception as e:
         print(f"⚠️ YTD reference price error for {ticker}: {str(e)}")
+        return None
+
+def get_latest_price(ticker: str) -> Optional[float]:
+    try:
+        stock = yf.Ticker(ticker)
+        data = stock.history(period="2d", interval="1d")
+        if data.empty:
+            return None
+        return data['Close'].iloc[-1]
+    except Exception as e:
+        print(f"⚠️ Price fetch error for {ticker}: {str(e)}")
         return None
 
 def fetch_bitcoin_historical(cg: CoinGeckoAPI, days: int) -> Optional[float]:
@@ -107,17 +128,6 @@ def fetch_paxg_ytd_price(cg: CoinGeckoAPI) -> Optional[float]:
         print(f"⚠️ PAXG YTD price error: {str(e)}")
         return None
 
-def get_latest_price(ticker: str) -> Optional[float]:
-    try:
-        stock = yf.Ticker(ticker)
-        data = stock.history(period="2d", interval="1d")
-        if data.empty:
-            return None
-        return data['Close'].iloc[-1]
-    except Exception as e:
-        print(f"⚠️ Price fetch error for {ticker}: {str(e)}")
-        return None
-
 def fetch_gold_price_from_coingecko(cg: CoinGeckoAPI) -> Optional[float]:
     try:
         result = cg.get_price(ids="pax-gold", vs_currencies="zar")
@@ -127,17 +137,7 @@ def fetch_gold_price_from_coingecko(cg: CoinGeckoAPI) -> Optional[float]:
         return None
 
 def fetch_jse_historical_yf(days: int) -> Optional[float]:
-    ticker = "^J203.JO"
-    try:
-        buffer_days = max(20, days * 3)
-        stock = yf.Ticker(ticker)
-        data = stock.history(period=f"{days + buffer_days}d", interval="1d")
-        if data.empty or len(data) < days + 1:
-            return None
-        return data['Close'].iloc[-days - 1]
-    except Exception as e:
-        print(f"⚠️ JSE YF historical fetch failed: {str(e)}")
-        return None
+    return fetch_historical("^J203.JO", days)
 
 def fetch_market_data() -> Optional[Dict[str, Any]]:
     cg = CoinGeckoAPI()
@@ -149,18 +149,13 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         jse = get_latest_price("^J203.JO")
         jse_1d = fetch_jse_historical_yf(1)
         jse_30d = fetch_jse_historical_yf(30)
-        jse_ytd = fetch_jse_historical_yf((now - start_of_year).days)
+        jse_ytd = get_ytd_reference_price("^J203.JO")
 
         forex = {k: get_latest_price(k) for k in ["ZAR=X", "EURZAR=X", "GBPZAR=X"]}
         commodities = {"BZ=F": get_latest_price("BZ=F")}
         indices = {"^GSPC": get_latest_price("^GSPC")}
 
-        try:
-            bitcoin_now = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
-        except Exception as e:
-            print(f"⚠️ Bitcoin current price error: {str(e)}")
-            bitcoin_now = None
-
+        bitcoin_now = cg.get_price(ids="bitcoin", vs_currencies="zar").get("bitcoin", {}).get("zar")
         gold_now = fetch_gold_price_from_coingecko(cg)
 
         results = {
