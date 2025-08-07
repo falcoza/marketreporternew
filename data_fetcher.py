@@ -1,10 +1,10 @@
-from datetime import datetime
-import requests
-from typing import Optional, Dict, Any, Tuple
-from PIL import Image, ImageDraw, ImageFont
-from config import *
-import random
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any
+from pycoingecko import CoinGeckoAPI
+import yfinance as yf
+import pytz
 
+# --- Percentage Calculator ---
 def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
     if None in (old, new) or old == 0:
         return 0.0
@@ -13,147 +13,104 @@ def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
     except (TypeError, ZeroDivisionError):
         return 0.0
 
-def generate_infographic(data: Dict[str, Any]) -> str:
+# --- Load Yahoo Ticker Data ---
+def fetch_yf_data(ticker: str, ytd_open_fallback: Optional[float] = None) -> Dict[str, float]:
     try:
-        georgia = ImageFont.truetype(FONT_PATHS['georgia'], 18)
-        georgia_bold = ImageFont.truetype(FONT_PATHS['georgia_bold'], 20)
-        footer_font = ImageFont.truetype(FONT_PATHS['georgia'], 16)
+        tz = pytz.timezone("Africa/Johannesburg")
+        now = datetime.now(tz)
+        today_str = now.strftime('%Y-%m-%d')
+        month_start = now.replace(day=1).strftime('%Y-%m-%d')
+        ytd_start = f"{now.year}-01-01"
 
-        img = Image.new("RGB", (520, 500), THEME['background'])
-        draw = ImageDraw.Draw(img)
+        df = yf.download(ticker, start=ytd_start, end=today_str, interval='1d', progress=False)
 
-        header_text = f"Market Report {data['timestamp']}"
-        header_width = georgia_bold.getlength(header_text)
-        draw.text(((520 - header_width) // 2, 15), header_text, font=georgia_bold, fill=THEME['text'])
+        if df.empty or df.shape[0] < 2:
+            raise ValueError(f"No data for {ticker}")
 
-        y_position = 60
-        x_position = 25
-        for col_name, col_width in REPORT_COLUMNS:
-            draw.rectangle(
-                [(x_position, y_position), (x_position + col_width, y_position + 30)],
-                fill=THEME['header']
-            )
-            text_width = georgia_bold.getlength(col_name)
-            draw.text(
-                (x_position + (col_width - text_width) // 2, y_position + 5),
-                col_name,
-                font=georgia_bold,
-                fill="white"
-            )
-            x_position += col_width
+        current = df["Close"][-1]
+        prev = df["Close"][-2]
+        monthly = df.loc[df.index >= month_start]["Open"].iloc[0] if month_start in df.index.strftime('%Y-%m-%d') else df["Open"][0]
+        ytd = df.loc[df.index >= ytd_start]["Open"].iloc[0] if ytd_start in df.index.strftime('%Y-%m-%d') else (ytd_open_fallback or df["Open"][0])
 
-        y_position = 90
-        metrics = [
-            ("JSE All Share", data["JSEALSHARE"]),
-            ("USD/ZAR", data["USDZAR"]),
-            ("EUR/ZAR", data["EURZAR"]),
-            ("GBP/ZAR", data["GBPZAR"]),
-            ("Brent Crude", data["BRENT"]),
-            ("Gold", data["GOLD"]),
-            ("S&P 500", data["SP500"]),
-            ("Bitcoin ZAR", data["BITCOINZAR"])
-        ]
-
-        for idx, (metric_name, values) in enumerate(metrics):
-            x_position = 25
-            bg_color = "#F5F5F5" if idx % 2 == 0 else THEME['background']
-
-            draw.rectangle(
-                [(25, y_position), (520 - 25, y_position + 34)],
-                fill=bg_color
-            )
-
-            draw.text((x_position + 5, y_position + 5), metric_name, font=georgia, fill=THEME['text'])
-            x_position += REPORT_COLUMNS[0][1]
-
-            today_val = values["Today"]
-            if today_val > 1000000:
-                today_text = f"{today_val/1000000:.2f}M"
-            elif today_val > 1000:
-                today_text = f"{today_val:,.0f}"
-            else:
-                today_text = f"{today_val:,.2f}"
-
-            draw.text((x_position + 5, y_position + 5), today_text, font=georgia, fill=THEME['text'])
-            x_position += REPORT_COLUMNS[1][1]
-
-            for period in ["ID%", "IM%", "YTD%"]:
-                value_key = period.replace('%', '')
-                value = values[value_key]
-                color = THEME['positive'] if value >= 0 else THEME['negative']
-                text = f"{value:+.1f}%" if value != 0 else "0.0%"
-                text_width = georgia.getlength(text)
-                draw.text(
-                    (x_position + (REPORT_COLUMNS[2][1] - text_width) // 2, y_position + 5),
-                    text,
-                    font=georgia,
-                    fill=color
-                )
-                x_position += REPORT_COLUMNS[2][1]
-
-            y_position += 34
-
-        draw.text((25, y_position + 10), "All values are stated in rands", font=footer_font, fill="#666666")
-        footer_text = "Data: Yahoo Finance, CoinGecko"
-        footer_width = footer_font.getlength(footer_text)
-        draw.text((520 - footer_width - 15, y_position + 35), footer_text, font=footer_font, fill="#666666")
-
-        filename = f"Market_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.png"
-        img.save(filename)
-        return filename
-
+        return {
+            "Today": float(current),
+            "ID": calculate_percentage(prev, current),
+            "IM": calculate_percentage(monthly, current),
+            "YTD": calculate_percentage(ytd, current)
+        }
     except Exception as e:
-        raise RuntimeError(f"Infographic generation failed: {str(e)}")
+        print(f"⚠️ YahooFinance error [{ticker}]: {e}")
+        return {"Today": 0.0, "ID": 0.0, "IM": 0.0, "YTD": 0.0}
 
-def fetch_real_time_data() -> Tuple[float, float, float, float]:
+# --- CoinGecko Bitcoin Fetch ---
+def fetch_bitcoin_zar_data() -> Dict[str, float]:
     try:
-        current_price = 17.89 + random.uniform(-0.5, 0.5)
-        prev_close = 17.89
-        monthly_open = 17.75
-        ytd_open = 18.80
-        return current_price, prev_close, monthly_open, ytd_open
-    except Exception:
-        return 17.89, 17.89, 17.75, 18.80
+        cg = CoinGeckoAPI()
+        today_data = cg.get_price(ids='bitcoin', vs_currencies='zar')
+        today = today_data['bitcoin']['zar']
 
-def get_percentages(current: float, prev: float, monthly_open: float, ytd_open: float) -> Dict[str, float]:
-    return {
-        "Today": current,
-        "ID": calculate_percentage(prev, current),
-        "IM": calculate_percentage(monthly_open, current),
-        "YTD": calculate_percentage(ytd_open, current)
-    }
+        # Fetch historical prices
+        history = {
+            '1d': cg.get_coin_market_chart_range_by_id(
+                id='bitcoin',
+                vs_currency='zar',
+                from_timestamp=(datetime.now() - timedelta(days=2)).timestamp(),
+                to_timestamp=datetime.now().timestamp()
+            ),
+            '1m': cg.get_coin_market_chart_range_by_id(
+                id='bitcoin',
+                vs_currency='zar',
+                from_timestamp=(datetime.now() - timedelta(days=30)).timestamp(),
+                to_timestamp=datetime.now().timestamp()
+            ),
+            'ytd': cg.get_coin_market_chart_range_by_id(
+                id='bitcoin',
+                vs_currency='zar',
+                from_timestamp=datetime(datetime.now().year, 1, 1).timestamp(),
+                to_timestamp=datetime.now().timestamp()
+            )
+        }
 
+        def get_open_price(chart_data):
+            return chart_data['prices'][0][1] if chart_data and chart_data.get("prices") else today
+
+        return {
+            "Today": today,
+            "ID": calculate_percentage(get_open_price(history['1d']), today),
+            "IM": calculate_percentage(get_open_price(history['1m']), today),
+            "YTD": calculate_percentage(get_open_price(history['ytd']), today),
+        }
+    except Exception as e:
+        print(f"⚠️ CoinGecko error: {e}")
+        return {"Today": 0.0, "ID": 0.0, "IM": 0.0, "YTD": 0.0}
+
+# --- Master Fetch ---
 def fetch_market_data() -> Optional[Dict[str, Any]]:
     try:
-        jse_current, jse_prev, jse_monthly, jse_ytd = 99674, 99674, 98000, 84500
-        usd_current, usd_prev, usd_monthly, usd_ytd = fetch_real_time_data()
-        eur_current = 20.71 + (usd_current - 17.89) * 1.15
-        gbp_current = 23.73 + (usd_current - 17.89) * 1.30
-        brent_current = 66.31 + random.uniform(-1, 1)
-
-        results = {
+        return {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "JSEALSHARE": get_percentages(jse_current, jse_prev, jse_monthly, jse_ytd),
-            "USDZAR": get_percentages(usd_current, usd_prev, usd_monthly, usd_ytd),
-            "EURZAR": get_percentages(eur_current, 20.71, 20.40, 19.50),
-            "GBPZAR": get_percentages(gbp_current, 23.73, 23.60, 23.55),
-            "BRENT": get_percentages(brent_current, 66.31, 67.50, 76.00),
-            "GOLD": get_percentages(59961, 60200, 59400, 49700),
-            "SP500": get_percentages(6345, 6340, 6250, 5870),
-            "BITCOINZAR": get_percentages(2034576, 2040000, 1925000, 1768000)
+            "JSEALSHARE": fetch_yf_data("^J203.JO", ytd_open_fallback=84500),
+            "USDZAR": fetch_yf_data("ZAR=X", ytd_open_fallback=18.80),
+            "EURZAR": fetch_yf_data("EURZAR=X", ytd_open_fallback=19.50),
+            "GBPZAR": fetch_yf_data("GBPZAR=X", ytd_open_fallback=23.55),
+            "BRENT": fetch_yf_data("BZ=F", ytd_open_fallback=76.00),
+            "GOLD": fetch_yf_data("GC=F", ytd_open_fallback=49700),
+            "SP500": fetch_yf_data("^GSPC", ytd_open_fallback=5870),
+            "BITCOINZAR": fetch_bitcoin_zar_data()
         }
-        return results
     except Exception as e:
-        print(f"❌ Critical error in fetch_market_data: {str(e)}")
+        print(f"❌ Critical error in fetch_market_data: {e}")
         return None
 
+# --- Script Entrypoint ---
 if __name__ == "__main__":
     data = fetch_market_data()
     if data:
+        from generator import generate_infographic  # Ensure you import from correct file
         try:
             filename = generate_infographic(data)
             print(f"✅ Infographic generated: {filename}")
         except Exception as e:
-            print(f"❌ Failed to generate infographic: {str(e)}")
+            print(f"❌ Infographic generation failed: {e}")
     else:
         print("❌ Failed to fetch market data")
