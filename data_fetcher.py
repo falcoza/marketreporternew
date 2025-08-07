@@ -2,22 +2,20 @@ from datetime import datetime, timezone, timedelta
 import pytz
 from typing import Optional, Dict, Any
 from PIL import Image, ImageDraw, ImageFont
-from datetime import datetime
 from config import *
 
+# -- Percentage calculation helper --
 def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
-if None in (old, new) or old == 0:
-return 0.0
-def generate_infographic(data):
-try:
+    if None in (old, new) or old == 0:
+        return 0.0
     try:
-return ((new - old) / old) * 100
-except (TypeError, ZeroDivisionError):
-return 0.0
-@@ -219,124 +216,8 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
-}
+        return ((new - old) / old) * 100
+    except (TypeError, ZeroDivisionError):
+        return 0.0
 
-return results
+# -- Infographic Generator --
+def generate_infographic(data):
+    try:
         # Load Georgia fonts with fallback
         georgia = ImageFont.truetype(FONT_PATHS['georgia'], 18)
         georgia_bold = ImageFont.truetype(FONT_PATHS['georgia_bold'], 20)
@@ -135,13 +133,6 @@ return results
         img.save(filename)
         return filename
 
-except Exception as e:
     except Exception as e:
-print(f"❌ Critical error in fetch_market_data: {str(e)}")
-return None
-
-@@ -347,4 +228,3 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
-print(data)
-else:
-print("❌ Failed to fetch market data")
-        raise RuntimeError(f"Infographic generation failed: {str(e)}")
+        print(f"❌ Critical error in generate_infographic: {str(e)}")
+        return None
