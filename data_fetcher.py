@@ -2,22 +2,20 @@ from datetime import datetime, timezone, timedelta
 import pytz
 from typing import Optional, Dict, Any
 from PIL import Image, ImageDraw, ImageFont
-from datetime import datetime
 from config import *
 
-def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
-if None in (old, new) or old == 0:
-return 0.0
-def generate_infographic(data):
-try:
-    try:
-return ((new - old) / old) * 100
-except (TypeError, ZeroDivisionError):
-return 0.0
-@@ -219,124 +216,8 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
-}
 
-return results
+def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
+    if None in (old, new) or old == 0:
+        return 0.0
+    try:
+        return ((new - old) / old) * 100
+    except (TypeError, ZeroDivisionError):
+        return 0.0
+
+
+def generate_infographic(data: Dict[str, Any]) -> str:
+    try:
         # Load Georgia fonts with fallback
         georgia = ImageFont.truetype(FONT_PATHS['georgia'], 18)
         georgia_bold = ImageFont.truetype(FONT_PATHS['georgia_bold'], 20)
@@ -85,7 +83,7 @@ return results
             )
             x_position += REPORT_COLUMNS[0][1]
 
-            # Today’s Value
+            # Today's Value
             today_val = values["Today"]
             today_text = f"{today_val:,.0f}" if today_val > 1000 else f"{today_val:,.2f}"
             draw.text(
@@ -135,13 +133,78 @@ return results
         img.save(filename)
         return filename
 
-except Exception as e:
     except Exception as e:
-print(f"❌ Critical error in fetch_market_data: {str(e)}")
-return None
-
-@@ -347,4 +228,3 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
-print(data)
-else:
-print("❌ Failed to fetch market data")
         raise RuntimeError(f"Infographic generation failed: {str(e)}")
+
+
+def fetch_market_data() -> Optional[Dict[str, Any]]:
+    try:
+        # This would be replaced with actual API calls in production
+        results = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "JSEALSHARE": {
+                "Today": 99674,
+                "Change": 0.0,
+                "Monthly": 0.0,
+                "YTD": 18.0
+            },
+            "USDZAR": {
+                "Today": 17.89,
+                "Change": 0.0,
+                "Monthly": 0.0,
+                "YTD": -4.9
+            },
+            "EURZAR": {
+                "Today": 20.71,
+                "Change": 0.0,
+                "Monthly": 0.0,
+                "YTD": 6.3
+            },
+            "GBPZAR": {
+                "Today": 23.73,
+                "Change": 0.0,
+                "Monthly": 0.0,
+                "YTD": 0.7
+            },
+            "BRENT": {
+                "Today": 66.31,
+                "Change": 0.0,
+                "Monthly": 0.0,
+                "YTD": -12.7
+            },
+            "GOLD": {
+                "Today": 59961,
+                "Change": -0.5,
+                "Monthly": 0.9,
+                "YTD": 20.7
+            },
+            "SP500": {
+                "Today": 6345,
+                "Change": 0.0,
+                "Monthly": 0.0,
+                "YTD": 8.1
+            },
+            "BITCOINZAR": {
+                "Today": 2034576,
+                "Change": -0.2,
+                "Monthly": 5.7,
+                "YTD": 15.1
+            }
+        }
+        return results
+
+    except Exception as e:
+        print(f"❌ Critical error in fetch_market_data: {str(e)}")
+        return None
+
+
+if __name__ == "__main__":
+    data = fetch_market_data()
+    if data:
+        try:
+            filename = generate_infographic(data)
+            print(f"✅ Infographic generated: {filename}")
+        except Exception as e:
+            print(f"❌ Failed to generate infographic: {str(e)}")
+    else:
+        print("❌ Failed to fetch market data")
