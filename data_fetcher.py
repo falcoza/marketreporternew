@@ -42,16 +42,23 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         for label, symbol in tickers.items():
             try:
                 ticker = yf.Ticker(symbol)
-                hist = ticker.history(period="5d", interval="1d")  # Changed to ensure clean daily data
-
-                if hist.empty:
+                
+                # Get daily data for reliable 1D% changes
+                daily_hist = ticker.history(period="5d", interval="1d")
+                if daily_hist.empty:
                     print(f"⚠️ No data for {label} ({symbol})")
                     continue
 
-                today_val = hist["Close"].iloc[-1]
-                day_ago_val = hist["Close"].iloc[-2]  # Now reliably gets previous close
-                month_ago_val = hist["Close"].iloc[-30] if len(hist) >= 30 else None
-                ytd_val = ticker.history(start=ytd_start)["Close"].iloc[0]
+                today_val = daily_hist["Close"].iloc[-1]
+                day_ago_val = daily_hist["Close"].iloc[-2]  # Previous trading day
+                
+                # Get monthly data using calendar dates
+                monthly_hist = ticker.history(start=one_month_ago, end=one_day_ago)
+                month_ago_val = monthly_hist["Close"].iloc[0] if not monthly_hist.empty else None
+                
+                # Get YTD data
+                ytd_hist = ticker.history(start=ytd_start)
+                ytd_val = ytd_hist["Close"].iloc[0] if not ytd_hist.empty else None
 
                 data[label] = {
                     "Today": float(today_val),
@@ -63,7 +70,7 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
                 print(f"⚠️ Error fetching {label}: {e}")
                 continue
 
-        # Crypto from CoinGecko
+        # Crypto from CoinGecko (unchanged)
         try:
             cg = CoinGeckoAPI()
             btc_data = cg.get_coin_market_chart_range_by_id(
@@ -78,8 +85,8 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
                 raise ValueError("Empty BTC price data")
 
             btc_today = prices[-1][1]
-            btc_day_ago = next((p[1] for p in prices if datetime.fromtimestamp(p[0] / 1000, sa_tz).date() == (now - timedelta(days=1)).date()), None)
-            btc_month_ago = next((p[1] for p in prices if datetime.fromtimestamp(p[0] / 1000, sa_tz).date() == (now - timedelta(days=30)).date()), None)
+            btc_day_ago = next((p[1] for p in prices if datetime.fromtimestamp(p[0]/1000, sa_tz).date() == (now - timedelta(days=1)).date()), None)
+            btc_month_ago = next((p[1] for p in prices if datetime.fromtimestamp(p[0]/1000, sa_tz).date() == (now - timedelta(days=30)).date()), None)
             btc_ytd = prices[0][1]
 
             data["BITCOINZAR"] = {
