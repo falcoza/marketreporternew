@@ -13,142 +13,160 @@ def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
     except (TypeError, ZeroDivisionError):
         return 0.0
 
-def safe_yfinance_fetch(ticker, max_retries=3, delay=1):
-    for attempt in range(max_retries):
+def get_jse_data() -> Dict[str, float]:
+    """Special handling for JSE All Share index"""
+    for ticker in ["^J203.JO", "J203.JO"]:  # Try both common tickers
         try:
-            return ticker.history(period="7d", interval="1d")  # Increased from 5d to 7d
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period="60d")  # Extended period for reliability
+            
+            if len(hist) < 5:  # Need at least 5 trading days
+                continue
+                
+            current = hist["Close"].iloc[-1]
+            
+            # Find most recent trading day (skip weekends/holidays)
+            prev_day = hist["Close"].iloc[-2] if len(hist) > 1 else current
+            
+            # Get 30 trading days ago (≈1 month)
+            month_ago = hist["Close"].iloc[-22] if len(hist) > 21 else current
+            
+            # Get YTD price
+            ytd_hist = stock.history(start=f"{datetime.now().year}-01-01")
+            ytd_price = ytd_hist["Close"].iloc[0] if not ytd_hist.empty else None
+            
+            return {
+                "Today": round(current, 2),
+                "Change": round(calculate_percentage(prev_day, current), 1),
+                "Monthly": round(calculate_percentage(month_ago, current), 1),
+                "YTD": round(calculate_percentage(ytd_price, current), 1) if ytd_price else 0.0
+            }
         except Exception as e:
-            if attempt == max_retries - 1:
-                raise
-            time.sleep(delay)
-    return None
+            print(f"JSE {ticker} error: {str(e)}")
+            continue
+    
+    return {"Today": 0.0, "Change": 0.0, "Monthly": 0.0, "YTD": 0.0}
+
+def get_gold_in_zar(usd_zar_rate: float) -> Dict[str, float]:
+    """Convert gold price from USD to ZAR"""
+    try:
+        gold_usd = yf.Ticker("GC=F").history(period="10d")
+        if gold_usd.empty:
+            return {"Today": 0.0, "Change": 0.0, "Monthly": 0.0, "YTD": 0.0}
+            
+        current_usd = gold_usd["Close"].iloc[-1]
+        current_zar = current_usd * usd_zar_rate
+        
+        # Get previous day
+        prev_day_usd = gold_usd["Close"].iloc[-2] if len(gold_usd) > 1 else current_usd
+        prev_day_zar = prev_day_usd * usd_zar_rate
+        
+        # Get monthly (simplified)
+        monthly_usd = gold_usd["Close"].iloc[-22] if len(gold_usd) > 21 else current_usd
+        monthly_zar = monthly_usd * usd_zar_rate
+        
+        return {
+            "Today": round(current_zar, 2),
+            "Change": round(calculate_percentage(prev_day_zar, current_zar), 1),
+            "Monthly": round(calculate_percentage(monthly_zar, current_zar), 1),
+            "YTD": 0.0  # Will be calculated separately
+        }
+    except Exception as e:
+        print(f"Gold conversion error: {str(e)}")
+        return {"Today": 0.0, "Change": 0.0, "Monthly": 0.0, "YTD": 0.0}
+
+def get_bitcoin_data() -> Dict[str, float]:
+    """Improved Bitcoin data with proper percentage changes"""
+    try:
+        cg = CoinGeckoAPI()
+        
+        # Get current price
+        btc_now = cg.get_price(ids="bitcoin", vs_currencies="zar")["bitcoin"]["zar"]
+        
+        # Get historical data (past 30 days)
+        btc_hist = cg.get_coin_market_chart_by_id(
+            id="bitcoin",
+            vs_currency="zar",
+            days="30"
+        )["prices"]
+        
+        if not btc_hist:
+            return {"Today": 0.0, "Change": 0.0, "Monthly": 0.0, "YTD": 0.0}
+        
+        # Find yesterday's price (24h ago)
+        now = datetime.now()
+        yesterday = [p[1] for p in btc_hist 
+                    if (now - datetime.fromtimestamp(p[0]/1000)).days == 1]
+        btc_yesterday = yesterday[-1] if yesterday else btc_hist[-2][1]
+        
+        # Get monthly price (30 days ago)
+        monthly = [p[1] for p in btc_hist 
+                  if (now - datetime.fromtimestamp(p[0]/1000)).days >= 28]  # 28-31 day range
+        btc_monthly = monthly[0] if monthly else btc_hist[0][1]
+        
+        # Get YTD price
+        ytd_data = cg.get_coin_market_chart_range_by_id(
+            id="bitcoin",
+            vs_currency="zar",
+            from_timestamp=int(datetime(now.year, 1, 1).timestamp()),
+            to_timestamp=int(now.timestamp())
+        )
+        btc_ytd = ytd_data["prices"][0][1] if ytd_data.get("prices") else None
+        
+        return {
+            "Today": round(btc_now, 2),
+            "Change": round(calculate_percentage(btc_yesterday, btc_now), 1),
+            "Monthly": round(calculate_percentage(btc_monthly, btc_now), 1),
+            "YTD": round(calculate_percentage(btc_ytd, btc_now), 1) if btc_ytd else 0.0
+        }
+    except Exception as e:
+        print(f"Bitcoin error: {str(e)}")
+        return {"Today": 0.0, "Change": 0.0, "Monthly": 0.0, "YTD": 0.0}
 
 def fetch_market_data() -> Optional[Dict[str, Any]]:
     try:
         sa_tz = pytz.timezone("Africa/Johannesburg")
         now = datetime.now(sa_tz)
-        today_str = now.strftime('%Y-%m-%d')
-
-        # Increased buffer days for more reliable lookback
-        one_day_ago = (now - timedelta(days=2)).strftime('%Y-%m-%d')  # 2-day window
-        one_month_ago = (now - timedelta(days=40)).strftime('%Y-%m-%d')  # 40-day buffer
-        ytd_start = datetime(now.year, 1, 1).strftime('%Y-%m-%d')
-
-        tickers = {
-            "JSEALSHARE": ["^J203.JO", "J203.JO"],  # Multiple ticker options
-            "USDZAR": "USDZAR=X",
-            "EURZAR": "EURZAR=X",
-            "GBPZAR": "GBPZAR=X",
-            "BRENT": "BZ=F",
-            "GOLD": "GC=F",
-            "SP500": "^GSPC"
-        }
-
         data = {}
-
-        # Modified JSE handling with fallback tickers
-        jse_data = None
-        for ticker in tickers["JSEALSHARE"]:
+        
+        # 1. Get USD/ZAR rate first (needed for gold conversion)
+        zar_rate = yf.Ticker("ZAR=X").history(period="2d")["Close"].iloc[-1]
+        
+        # 2. Get all market data
+        data["JSEALSHARE"] = get_jse_data()
+        data["USDZAR"] = {
+            "Today": round(zar_rate, 2),
+            "Change": 0.0,  # Will calculate later
+            "Monthly": 0.0,
+            "YTD": 0.0
+        }
+        data["GOLD"] = get_gold_in_zar(zar_rate)
+        data["BITCOINZAR"] = get_bitcoin_data()
+        
+        # 3. Get other forex pairs
+        for pair in ["EURZAR=X", "GBPZAR=X"]:
             try:
-                tkr = yf.Ticker(ticker)
-                hist = tkr.history(period="40d")  # Extended history
-                if len(hist) < 5:  # Require minimum data
+                hist = yf.Ticker(pair).history(period="10d")
+                if hist.empty:
                     continue
+                    
+                current = hist["Close"].iloc[-1]
+                prev = hist["Close"].iloc[-2] if len(hist) > 1 else current
                 
-                today_val = hist["Close"].iloc[-1]
-                # Find most recent previous trading day
-                day_ago_val = hist["Close"].iloc[-2] if len(hist) > 1 else today_val
-                
-                # Get exact monthly (22 trading days ≈ 1 month)
-                month_ago_val = hist["Close"].iloc[-22] if len(hist) > 21 else today_val
-                
-                ytd_hist = tkr.history(start=ytd_start)
-                ytd_val = ytd_hist["Close"].iloc[0] if not ytd_hist.empty else None
-
-                jse_data = {
-                    "Today": float(today_val),
-                    "Change": calculate_percentage(day_ago_val, today_val),
-                    "Monthly": calculate_percentage(month_ago_val, today_val),
-                    "YTD": calculate_percentage(ytd_val, today_val) if ytd_val else 0.0
+                data[pair.replace("=X", "")] = {
+                    "Today": round(current, 2),
+                    "Change": round(calculate_percentage(prev, current), 1),
+                    "Monthly": 0.0,
+                    "YTD": 0.0
                 }
-                break
             except Exception:
                 continue
         
-        if jse_data:
-            data["JSEALSHARE"] = jse_data
-        else:
-            print("⚠️ Could not fetch JSE data from any ticker")
-
-        # Process other tickers normally
-        for label, symbol in [(k,v) for k,v in tickers.items() if k != "JSEALSHARE"]:
-            try:
-                ticker = yf.Ticker(symbol)
-                daily_hist = safe_yfinance_fetch(ticker)
-                if daily_hist is None or daily_hist.empty:
-                    continue
-
-                today_val = daily_hist["Close"].iloc[-1]
-                day_ago_val = daily_hist["Close"].iloc[-2] if len(daily_hist) > 1 else today_val
-                
-                monthly_hist = ticker.history(start=one_month_ago, end=one_day_ago)
-                month_ago_val = monthly_hist["Close"].iloc[0] if not monthly_hist.empty else None
-                
-                ytd_hist = ticker.history(start=ytd_start)
-                ytd_val = ytd_hist["Close"].iloc[0] if not ytd_hist.empty else None
-
-                data[label] = {
-                    "Today": float(today_val),
-                    "Change": calculate_percentage(day_ago_val, today_val),
-                    "Monthly": calculate_percentage(month_ago_val, today_val),
-                    "YTD": calculate_percentage(ytd_val, today_val) if ytd_val else 0.0
-                }
-
-            except Exception as e:
-                print(f"⚠️ Error fetching {label}: {str(e)}")
-                continue
-
-        # Improved Bitcoin handling
-        try:
-            cg = CoinGeckoAPI()
-            btc_data = cg.get_coin_market_chart_range_by_id(
-                'bitcoin', 'zar',
-                from_timestamp=int((datetime.now() - timedelta(days=2)).timestamp()),
-                to_timestamp=int(datetime.now().timestamp())
-            )
-            
-            if not btc_data.get('prices'):
-                raise ValueError("No BTC price data")
-                
-            prices = btc_data['prices']
-            btc_today = prices[-1][1]
-            
-            # Find most recent prices with fallbacks
-            btc_day_ago = next(
-                (p[1] for p in prices 
-                if (datetime.now() - datetime.fromtimestamp(p[0]/1000)).days == 1),
-                prices[-2][1] if len(prices) > 1 else btc_today
-            )
-            
-            data["BITCOINZAR"] = {
-                "Today": float(btc_today),
-                "Change": calculate_percentage(btc_day_ago, btc_today),
-                "Monthly": 0.0,  # Simplified for now
-                "YTD": 0.0      # Simplified for now
-            }
-
-        except Exception as e:
-            print(f"⚠️ BTC fetch error: {str(e)}")
-            data["BITCOINZAR"] = {
-                "Today": 0.0,
-                "Change": 0.0,
-                "Monthly": 0.0,
-                "YTD": 0.0
-            }
-
+        # 4. Add timestamp
         data["timestamp"] = now.strftime("%d %b %Y, %H:%M")
+        
         return data
-
+        
     except Exception as e:
-        print(f"❌ Critical error: {str(e)}")
+        print(f"Critical error: {str(e)}")
         return None
