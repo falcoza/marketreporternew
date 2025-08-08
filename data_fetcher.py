@@ -3,26 +3,40 @@ from __future__ import annotations
 from datetime import datetime, timedelta, date
 from typing import Dict, Any, Optional, Tuple, List
 import io
+import random
 import time
 
-import pytz
 import pandas as pd
+import pytz
 import requests
 import yfinance as yf
 from pycoingecko import CoinGeckoAPI
 
 SAST = pytz.timezone("Africa/Johannesburg")
 
-# ------------ logging ------------
+# =========================
+# Logging
+# =========================
 def _log(msg: str) -> None:
     print(f"[data_fetcher] {msg}")
 
-# ------------ generic utils ------------
-def _safe_pct(new: Optional[float], base: Optional[float]) -> Optional[float]:
-    try:
-        if new is None or base is None or base == 0:
+# =========================
+# Scalar & DF helpers
+# =========================
+def _as_float(x):
+    """Convert scalar-like or 1-element Series/Index to float safely."""
+    import numpy as np
+    if isinstance(x, (pd.Series, pd.Index)):
+        if len(x) == 0:
             return None
-        return (new / base - 1.0) * 100.0
+        x = x.iloc[0]
+    if hasattr(x, "item"):  # numpy scalar -> Python scalar
+        try:
+            return x.item()
+        except Exception:
+            pass
+    try:
+        return float(x)
     except Exception:
         return None
 
@@ -36,40 +50,59 @@ def _ensure_df(df: Optional[pd.DataFrame]) -> bool:
     except Exception:
         return False
 
+def _dedup(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    if df is None or not isinstance(df, pd.DataFrame):
+        return df
+    try:
+        df = df[~df.index.duplicated(keep="last")]
+    except Exception:
+        pass
+    return df
+
 def _latest_close(df: pd.DataFrame) -> Optional[float]:
     try:
-        return float(df["Close"].dropna().iloc[-1])
+        val = df["Close"].dropna().iloc[-1]
+        return _as_float(val)
     except Exception:
         return None
 
 def _prev_close(df: pd.DataFrame) -> Optional[float]:
     try:
-        return float(df["Close"].dropna().iloc[-2])
+        val = df["Close"].dropna().iloc[-2]
+        return _as_float(val)
     except Exception:
         return None
 
 def _first_on_or_after(df: pd.DataFrame, target_dt: datetime) -> Optional[float]:
+    """Close from first trading day ON/AFTER target."""
     try:
-        idx = df.index
-        for ts in idx:
+        for ts in df.index:
             tloc = ts.tz_convert(SAST) if ts.tzinfo is not None else SAST.localize(ts)
             if tloc.date() >= target_dt.date():
-                return float(df.loc[ts, "Close"])
+                return _as_float(df.loc[ts, "Close"])
         return None
     except Exception:
         return None
 
 def _last_on_or_before(df: pd.DataFrame, target_dt: datetime) -> Optional[float]:
+    """Close from last trading day ON/BEFORE target."""
     try:
-        idx = df.index
-        candidate = None
-        for ts in idx:
+        out = None
+        for ts in df.index:
             tloc = ts.tz_convert(SAST) if ts.tzinfo is not None else SAST.localize(ts)
             if tloc.date() <= target_dt.date():
-                candidate = float(df.loc[ts, "Close"])
+                out = _as_float(df.loc[ts, "Close"])
             else:
                 break
-        return candidate
+        return out
+    except Exception:
+        return None
+
+def _safe_pct(new: Optional[float], base: Optional[float]) -> Optional[float]:
+    try:
+        if new is None or base is None or base == 0:
+            return None
+        return (new / base - 1.0) * 100.0
     except Exception:
         return None
 
@@ -77,41 +110,53 @@ def _assemble_row(today: Optional[float], one_d: Optional[float],
                   one_m: Optional[float], ytd: Optional[float]) -> Dict[str, Optional[float]]:
     return {"Today": today, "Change": one_d, "Monthly": one_m, "YTD": ytd}
 
-# ------------ Yahoo CSV first, then yfinance ------------
-def _yahoo_csv(symbol: str, start: datetime, end: datetime) -> Optional[pd.DataFrame]:
-    """
-    Download daily history via Yahoo CSV endpoint.
-    """
-    try:
-        p1 = int(start.timestamp())
-        # Yahoo often excludes the end day unless period2 is end-of-day+ buffer
-        p2 = int((end + timedelta(days=1)).timestamp())
-        url = (
-            f"https://query1.finance.yahoo.com/v7/finance/download/{symbol}"
-            f"?period1={p1}&period2={p2}&interval=1d&events=history"
-            f"&includeAdjustedClose=true"
-        )
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers, timeout=15)
-        if r.status_code != 200 or not r.text or "Date,Open,High,Low,Close" not in r.text:
-            _log(f"Yahoo CSV miss ({symbol}) http={r.status_code}")
-            return None
-        df = pd.read_csv(io.StringIO(r.text))
-        if "Date" not in df.columns or "Close" not in df.columns:
-            _log(f"Yahoo CSV malformed ({symbol})")
-            return None
-        df["Date"] = pd.to_datetime(df["Date"], utc=True)
-        df = df.set_index("Date").sort_index()
-        return df
-    except Exception as e:
-        _log(f"Yahoo CSV error ({symbol}): {e}")
-        return None
+# =========================
+# Yahoo (CSV first, then yfinance)
+# =========================
+_UAS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "Mozilla/5.0 (X11; Linux x86_64)",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+]
+
+def _yahoo_csv(symbol: str, start: datetime, end: datetime, retries: int = 2) -> Optional[pd.DataFrame]:
+    """Hit Yahoo's CSV endpoint; often more stable than yfinance cookie flow."""
+    for attempt in range(retries):
+        try:
+            p1 = int(start.timestamp())
+            # Yahoo usually excludes the end day unless you add +1 buffer
+            p2 = int((end + timedelta(days=1)).timestamp())
+            url = (
+                f"https://query1.finance.yahoo.com/v7/finance/download/{symbol}"
+                f"?period1={p1}&period2={p2}&interval=1d&events=history&includeAdjustedClose=true"
+            )
+            headers = {
+                "User-Agent": random.choice(_UAS),
+                "Accept": "text/csv,application/json;q=0.9,*/*;q=0.8",
+            }
+            r = requests.get(url, headers=headers, timeout=15)
+            if r.status_code != 200 or "Date,Open,High,Low,Close" not in r.text:
+                _log(f"Yahoo CSV miss ({symbol}) http={r.status_code}")
+                continue
+            df = pd.read_csv(io.StringIO(r.text))
+            if "Date" not in df.columns or "Close" not in df.columns:
+                _log(f"Yahoo CSV malformed ({symbol})")
+                continue
+            df["Date"] = pd.to_datetime(df["Date"], utc=True)
+            df = df.set_index("Date").sort_index()
+            df = _dedup(df)
+            if _ensure_df(df):
+                _log(f"Yahoo CSV OK ({symbol})")
+                return df
+            _log(f"Yahoo CSV empty ({symbol}) after parse")
+        except Exception as e:
+            _log(f"Yahoo CSV error ({symbol}) attempt {attempt+1}: {e}")
+        time.sleep(0.5 + attempt * 0.5)
+    return None
 
 def _yahoo_yf(symbol: str, start: datetime, end: datetime) -> Optional[pd.DataFrame]:
-    """
-    Fallback to yfinance if CSV fails (handles the odd cookie/crumb changes).
-    """
-    # Try window → period=ytd → period=1y
+    """yfinance fallback with multiple strategies; bail fast on known internal errors."""
+    # Strategy 1: window
     try:
         df = yf.download(
             symbol,
@@ -122,6 +167,7 @@ def _yahoo_yf(symbol: str, start: datetime, end: datetime) -> Optional[pd.DataFr
             progress=False,
             threads=False,
         )
+        df = _dedup(df)
         if _ensure_df(df):
             _log(f"yfinance OK ({symbol}) window")
             return df
@@ -129,40 +175,47 @@ def _yahoo_yf(symbol: str, start: datetime, end: datetime) -> Optional[pd.DataFr
     except Exception as e:
         _log(f"yfinance error ({symbol}) window: {e}")
 
-    for period in ("ytd", "1y"):
-        try:
-            df = yf.download(symbol, period=period, interval="1d",
-                             auto_adjust=False, progress=False, threads=False)
-            if _ensure_df(df):
-                _log(f"yfinance OK ({symbol}) period={period}")
-                return df
-            _log(f"yfinance empty ({symbol}) period={period}")
-        except Exception as e:
-            _log(f"yfinance error ({symbol}) period={period}: {e}")
+    # Strategy 2: period=ytd
+    try:
+        df = yf.download(symbol, period="ytd", interval="1d",
+                         auto_adjust=False, progress=False, threads=False)
+        df = _dedup(df)
+        if _ensure_df(df):
+            _log(f"yfinance OK ({symbol}) period=ytd")
+            return df
+        _log(f"yfinance empty ({symbol}) period=ytd")
+    except Exception as e:
+        _log(f"yfinance error ({symbol}) period=ytd: {e}")
+
+    # Strategy 3: period=1y
+    try:
+        df = yf.download(symbol, period="1y", interval="1d",
+                         auto_adjust=False, progress=False, threads=False)
+        df = _dedup(df)
+        if _ensure_df(df):
+            _log(f"yfinance OK ({symbol}) period=1y")
+            return df
+        _log(f"yfinance empty ({symbol}) period=1y")
+    except Exception as e:
+        _log(f"yfinance error ({symbol}) period=1y: {e}")
 
     return None
 
 def _get_from_yahoo(symbol: str, start: datetime, end: datetime) -> Optional[pd.DataFrame]:
-    # CSV first, then yfinance
+    """Preferred: CSV → yfinance."""
     df = _yahoo_csv(symbol, start, end)
     if _ensure_df(df):
-        _log(f"Yahoo CSV OK ({symbol})")
         return df
     return _yahoo_yf(symbol, start, end)
 
-# ------------ Stooq backups (CSV) ------------
+# =========================
+# Stooq & Frankfurter backups (quiet, only if Yahoo fails)
+# =========================
 def _stooq_csv(symbol: str) -> Optional[pd.DataFrame]:
-    """
-    Stooq CSV daily history.
-    Examples: CB.F (Brent), GC.F (Gold), ^SPX (S&P 500).
-    """
     try:
-        # documented by community: /q/d/?s=... (web) and CSV links on the page
-        # many mirrors expose CSV via q/d/l/; we try the standard HTML page and parse, but
-        # simplest robust route: use a known CSV link pattern used by datareader
         url = f"https://stooq.com/q/d/l/?s={symbol}&i=d"
         r = requests.get(url, timeout=15)
-        if r.status_code != 200 or not r.text or "Date,Open,High,Low,Close,Volume" not in r.text:
+        if r.status_code != 200 or "Date,Open,High,Low,Close,Volume" not in r.text:
             _log(f"Stooq CSV miss ({symbol}) http={r.status_code}")
             return None
         df = pd.read_csv(io.StringIO(r.text))
@@ -171,16 +224,13 @@ def _stooq_csv(symbol: str) -> Optional[pd.DataFrame]:
             return None
         df["Date"] = pd.to_datetime(df["Date"], utc=True)
         df = df.set_index("Date").sort_index()
-        return df
+        df = _dedup(df)
+        return df if _ensure_df(df) else None
     except Exception as e:
         _log(f"Stooq CSV error ({symbol}): {e}")
         return None
 
-# ------------ FX (Frankfurter fallback) ------------
 def _frankfurter_series(base: str, quote: str, start_d: date, end_d: date) -> Optional[pd.DataFrame]:
-    """
-    Returns daily series with 'Close' column named as FX rate base->quote.
-    """
     try:
         url = f"https://api.frankfurter.dev/v1/{start_d.isoformat()}..{end_d.isoformat()}?base={base}&symbols={quote}"
         r = requests.get(url, timeout=15)
@@ -199,16 +249,18 @@ def _frankfurter_series(base: str, quote: str, start_d: date, end_d: date) -> Op
         if len(rows) < 2:
             return None
         df = pd.DataFrame(rows, columns=["Date", "Close"]).set_index("Date").sort_index()
-        return df
+        df = _dedup(df)
+        return df if _ensure_df(df) else None
     except Exception as e:
         _log(f"Frankfurter error {base}{quote}: {e}")
         return None
 
-# ------------ Bitcoin (CoinGecko) ------------
+# =========================
+# Bitcoin via CoinGecko (≤ 365 days)
+# =========================
 def _btc_zar_ytd() -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
     cg = CoinGeckoAPI()
     now = datetime.now(SAST)
-    # Cap at 365 days due to public API limits
     jan1 = date(now.year, 1, 1)
     days = min(365, (now.date() - jan1).days + 2)
 
@@ -269,13 +321,16 @@ def _btc_zar_ytd() -> Tuple[Optional[float], Optional[float], Optional[float], O
         _safe_pct(today_close, ytd_anchor),
     )
 
-# ------------ public: fetch all ------------
+# =========================
+# Public: fetch all instruments
+# =========================
 def fetch_market_data() -> Optional[Dict[str, Any]]:
     now = datetime.now(SAST)
+    # Single window to cover 1M and YTD anchors
     start = min(now.replace(month=1, day=1), now - timedelta(days=60))
     end = now
 
-    # Verified primary symbols (Yahoo)
+    # Verified Yahoo symbols
     YAHOO = {
         "JSEALSHARE": "^J203.JO",     # FTSE/JSE All Share Index
         "USDZAR": "USDZAR=X",
@@ -283,9 +338,10 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         "GBPZAR": "GBPZAR=X",
         "BRENT": "BZ=F",              # Brent futures continuous
         "GOLD": "GC=F",               # Gold futures continuous
-        "SP500": "^GSPC",             # S&P 500 index
+        "SP500": "^GSPC",             # S&P 500 Index
     }
-    # Stooq backups where available
+
+    # Backup symbols on Stooq (CSV) if Yahoo fails completely
     STOOQ = {
         "BRENT": "cb.f",
         "GOLD": "gc.f",
@@ -294,7 +350,7 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
 
     data: Dict[str, Any] = {}
 
-    # 1) JSE ALSH (Yahoo only)
+    # ---- JSE ALSH (Yahoo only – there isn't a good free backup) ----
     sym = YAHOO["JSEALSHARE"]
     df = _get_from_yahoo(sym, start, end)
     if _ensure_df(df):
@@ -306,16 +362,15 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
                                             _safe_pct(latest, m_anchor), _safe_pct(latest, y_anchor))
         data["JSEALSHARE"]["_source"] = f"Yahoo:{sym}"
     else:
-        _log("No data for JSEALSHARE after Yahoo paths")
+        _log("No data for JSEALSHARE after Yahoo CSV+yfinance")
         data["JSEALSHARE"] = _assemble_row(None, None, None, None)
         data["JSEALSHARE"]["_source"] = "unavailable"
 
-    # 2) FX (Yahoo → Frankfurter)
+    # ---- FX: Yahoo primary, Frankfurter fallback ----
     for fx in ("USDZAR", "EURZAR", "GBPZAR"):
         sym = YAHOO[fx]
         df = _get_from_yahoo(sym, start, end)
         if not _ensure_df(df):
-            # Frankfurter fallback (ECB daily fixes)
             ff = _frankfurter_series(base=fx[:3], quote="ZAR",
                                      start_d=start.date(), end_d=end.date())
             if _ensure_df(ff):
@@ -331,4 +386,59 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
             latest = _latest_close(df)
             prev = _prev_close(df)
             m_anchor = _last_on_or_before(df, now - timedelta(days=30))
-            y_anchor = _first_o_
+            y_anchor = _first_on_or_after(df, now.replace(month=1, day=1))
+            data[fx] = _assemble_row(latest, _safe_pct(latest, prev),
+                                     _safe_pct(latest, m_anchor), _safe_pct(latest, y_anchor))
+            data[fx]["_source"] = f"Yahoo:{sym}"
+        else:
+            _log(f"No data for {fx} after Yahoo+Frankfurter")
+            data[fx] = _assemble_row(None, None, None, None)
+            data[fx]["_source"] = "unavailable"
+
+    # ---- Brent / Gold / SP500: Yahoo primary, Stooq backup ----
+    for label in ("BRENT", "GOLD", "SP500"):
+        sym = YAHOO[label]
+        df = _get_from_yahoo(sym, start, end)
+        if not _ensure_df(df):
+            st_sym = STOOQ.get(label)
+            sdf = _stooq_csv(st_sym) if st_sym else None
+            if _ensure_df(sdf):
+                latest = _latest_close(sdf)
+                prev = _prev_close(sdf)
+                m_anchor = _last_on_or_before(sdf, now - timedelta(days=30))
+                y_anchor = _first_on_or_after(sdf, now.replace(month=1, day=1))
+                data[label] = _assemble_row(latest, _safe_pct(latest, prev),
+                                            _safe_pct(latest, m_anchor), _safe_pct(latest, y_anchor))
+                data[label]["_source"] = f"Stooq:{st_sym}"
+                continue
+        if _ensure_df(df):
+            latest = _latest_close(df)
+            prev = _prev_close(df)
+            m_anchor = _last_on_or_before(df, now - timedelta(days=30))
+            y_anchor = _first_on_or_after(df, now.replace(month=1, day=1))
+            data[label] = _assemble_row(latest, _safe_pct(latest, prev),
+                                        _safe_pct(latest, m_anchor), _safe_pct(latest, y_anchor))
+            data[label]["_source"] = f"Yahoo:{sym}"
+        else:
+            _log(f"No data for {label} after Yahoo+Stooq")
+            data[label] = _assemble_row(None, None, None, None)
+            data[label]["_source"] = "unavailable"
+
+    # ---- Bitcoin (ZAR) with 365d cap ----
+    btc_today, btc_1d, btc_1m, btc_ytd = _btc_zar_ytd()
+    data["BITCOINZAR"] = _assemble_row(btc_today, btc_1d, btc_1m, btc_ytd)
+    data["BITCOINZAR"]["_source"] = "CoinGecko"
+
+    # ---- meta ----
+    data["timestamp"] = now.strftime("%d %b %Y, %H:%M")
+    required = ["JSEALSHARE","USDZAR","EURZAR","GBPZAR","BRENT","GOLD","SP500","BITCOINZAR"]
+    data["data_status"] = "complete" if all(k in data for k in required) else "partial"
+
+    # Helpful diagnostics for anchors that couldn't be computed
+    for k in required:
+        row = data.get(k, {})
+        for anchor in ("Change","Monthly","YTD"):
+            if row.get(anchor) is None:
+                _log(f"Anchor '{anchor}' missing for {k} (source={row.get('_source')})")
+
+    return data
