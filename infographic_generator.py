@@ -2,6 +2,22 @@ from PIL import Image, ImageDraw, ImageFont
 from datetime import datetime
 from config import *
 
+def _format_number(val):
+    if val is None:
+        return "N/A"
+    try:
+        return f"{val:,.0f}" if val >= 1000 else f"{val:,.2f}"
+    except Exception:
+        return "N/A"
+
+def _format_pct(val):
+    if val is None:
+        return "—"
+    try:
+        return f"{val:+.1f}%"
+    except Exception:
+        return "—"
+
 def generate_infographic(data):
     try:
         # Load Georgia fonts with fallback
@@ -9,106 +25,65 @@ def generate_infographic(data):
         georgia_bold = ImageFont.truetype(FONT_PATHS['georgia_bold'], 20)
         footer_font = ImageFont.truetype(FONT_PATHS['georgia'], 16)
 
-        # Create canvas (reduced height from 500 to 460)
+        # Canvas
         img = Image.new("RGB", (520, 460), THEME['background'])
         draw = ImageDraw.Draw(img)
 
-        # Header Section
-        header_text = f"Market Report {data['timestamp']}"
+        # Header
+        header_text = "Market Report"
+        timestamp = data.get("timestamp", datetime.now().strftime("%d %b %Y, %H:%M"))
         header_width = georgia_bold.getlength(header_text)
-        draw.text(
-            ((520 - header_width) // 2, 15),
-            header_text,
-            font=georgia_bold,
-            fill=THEME['text']
-        )
+        draw.text(((520 - header_width) // 2, 15), header_text, font=georgia_bold, fill=THEME['header'])
+        ts_width = georgia.getlength(timestamp)
+        draw.text(((520 - ts_width) // 2, 45), timestamp, font=georgia, fill=THEME['text'])
 
-        # Table Headers
-        y_position = 60
-        x_position = 25
-        for col_name, col_width in REPORT_COLUMNS:
-            draw.rectangle(
-                [(x_position, y_position), (x_position + col_width, y_position + 30)],
-                fill=THEME['header']
-            )
-            text_width = georgia_bold.getlength(col_name)
-            draw.text(
-                (x_position + (col_width - text_width) // 2, y_position + 5),
-                col_name,
-                font=georgia_bold,
-                fill="white"
-            )
-            x_position += col_width
-
-        # Data Rows
+        # Columns: Metric | Today | 1D | 1M | YTD
         y_position = 90
-        metrics = [
-            ("JSE All Share", data["JSEALSHARE"]),
-            ("USD/ZAR", data["USDZAR"]),
-            ("EUR/ZAR", data["EURZAR"]),
-            ("GBP/ZAR", data["GBPZAR"]),
-            ("Brent Crude", data["BRENT"]),
-            ("Gold", data["GOLD"]),
-            ("S&P 500", data["SP500"]),
-            ("Bitcoin ZAR", data["BITCOINZAR"])
-        ]
+        x = 20
 
-        for idx, (metric_name, values) in enumerate(metrics):
-            x_position = 25
-            bg_color = "#F5F5F5" if idx % 2 == 0 else THEME['background']
+        # Header row
+        col_titles = ["Metric", "Today", "1D", "1M", "YTD"]
+        col_widths = [160, 120, 60, 60, 60]
+        for i, title in enumerate(col_titles):
+            draw.text((x, y_position), title, font=georgia_bold, fill=THEME['text'])
+            x += col_widths[i]
+        y_position += 30
 
-            draw.rectangle(
-                [(25, y_position), (520 - 25, y_position + 34)],
-                fill=bg_color
-            )
+        # Data rows (order)
+        labels = ["JSEALSHARE","USDZAR","EURZAR","GBPZAR","BRENT","GOLD","SP500","BITCOINZAR"]
+
+        for label in labels:
+            vals = data.get(label, {})
+            today = vals.get("Today")
+            d1 = vals.get("Change")
+            m1 = vals.get("Monthly")
+            ytd = vals.get("YTD")
 
             # Metric name
-            draw.text(
-                (x_position + 5, y_position + 5),
-                metric_name,
-                font=georgia,
-                fill=THEME['text']
-            )
-            x_position += REPORT_COLUMNS[0][1]
+            x = 20
+            draw.text((x, y_position), label, font=georgia, fill=THEME['text'])
+            x += col_widths[0]
 
-            # Today’s Value
-            today_val = values["Today"]
-            today_text = f"{today_val:,.0f}" if today_val > 1000 else f"{today_val:,.2f}"
-            draw.text(
-                (x_position + 5, y_position + 5),
-                today_text,
-                font=georgia,
-                fill=THEME['text']
-            )
-            x_position += REPORT_COLUMNS[1][1]
+            # Today
+            draw.text((x, y_position), _format_number(today), font=georgia, fill=THEME['text'])
+            x += col_widths[1]
 
-            # Percentage values
-            for period in ["Change", "Monthly", "YTD"]:
-                value = values[period]
-                color = THEME['positive'] if value >= 0 else THEME['negative']
-                text = f"{value:+.1f}%"
-                text_width = georgia.getlength(text)
-                draw.text(
-                    (x_position + (REPORT_COLUMNS[2][1] - text_width) // 2, y_position + 5),
-                    text,
-                    font=georgia,
-                    fill=color
-                )
-                x_position += REPORT_COLUMNS[2][1]
+            # 1D, 1M, YTD with colors
+            for val in (d1, m1, ytd):
+                color = THEME['positive'] if (isinstance(val, (int,float)) and val >= 0) else THEME['negative']
+                draw.text((x, y_position), _format_pct(val), font=georgia, fill=color)
+                x += col_widths[[2,3,4][0]]
+                # Since we don't dynamically track index, just increment properly
+                if x == 20 + sum(col_widths[:2]) + col_widths[2]:
+                    pass
+            # move to next line
+            y_position += 32
 
-            y_position += 34
-
-        # Combined disclaimer + data source (centered under last row)
-        footer_text = "All values are stated in rands · Data: Yahoo Finance, CoinGecko"
+        # Footer
+        footer_text = "Data sources: Yahoo Finance, CoinGecko"
         footer_width = footer_font.getlength(footer_text)
-        draw.text(
-            ((520 - footer_width) // 2, y_position + 15),
-            footer_text,
-            font=footer_font,
-            fill="#666666"
-        )
+        draw.text(((520 - footer_width) // 2, y_position + 15), footer_text, font=footer_font, fill="#666666")
 
-        # Save infographic
         filename = f"Market_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.png"
         img.save(filename)
         return filename
