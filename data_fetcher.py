@@ -90,8 +90,6 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
 
             "USDZAR": "USDZAR=X",
 
-@@ -50,7 +50,6 @@
-
         }
 
 
@@ -106,8 +104,6 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         for label, symbol in tickers.items():
 
             try:
-
-@@ -65,69 +64,59 @@
 
                 today_val = daily_hist["Close"].iloc[-1]
 
@@ -341,7 +337,6 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
 
                 "Today": float(btc_today),
 
-@@ -138,20 +127,15 @@
 
 
 
