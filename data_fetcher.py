@@ -4,8 +4,8 @@ import yfinance as yf
 from pycoingecko import CoinGeckoAPI
 from typing import Optional, Dict, Any
 import time
-import pandas as pd
 
+# Helper: Calculate percentage change safely
 def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
     if None in (old, new) or old == 0:
         return 0.0
@@ -14,129 +14,91 @@ def calculate_percentage(old: Optional[float], new: Optional[float]) -> float:
     except (TypeError, ZeroDivisionError):
         return 0.0
 
-def get_jse_data() -> Dict[str, float]:
-    """Accurate JSE All Share calculations with proper date alignment"""
-    for ticker in ["^J203.JO", "J203.JO"]:
+def safe_yfinance_fetch(ticker, max_retries=3, delay=1):
+    for attempt in range(max_retries):
         try:
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period="1y", interval="1d")
-            
-            if len(hist) < 5:
-                continue
-                
-            current = hist["Close"].iloc[-1]
-            current_date = hist.index[-1].date()
-            
-            # 1-day change (exact previous trading day)
-            prev_trading_days = hist[hist.index.date < current_date]
-            if len(prev_trading_days) > 0:
-                prev_day = prev_trading_days["Close"].iloc[-1]
-                day_change = calculate_percentage(prev_day, current)
-            else:
-                day_change = 0.0
-            
-            # Monthly change (22 trading days ago)
-            month_ago = hist["Close"].iloc[-22] if len(hist) > 21 else current
-            month_change = calculate_percentage(month_ago, current)
-            
-            # YTD change (first trading day of year)
-            ytd_data = hist[hist.index.year == current_date.year]
-            if len(ytd_data) > 0:
-                ytd_price = ytd_data["Close"].iloc[0]
-                ytd_change = calculate_percentage(ytd_price, current)
-            else:
-                ytd_change = 0.0
-            
-            return {
-                "Today": round(current, 2),
-                "Change": round(day_change, 1),
-                "Monthly": round(month_change, 1),
-                "YTD": round(ytd_change, 1)
-            }
+            return ticker.history(period="5d", interval="1d")
         except Exception as e:
-            print(f"JSE error ({ticker}): {str(e)}")
-            continue
-    
-    return {"Today": 0.0, "Change": 0.0, "Monthly": 0.0, "YTD": 0.0}
-
-def get_gold_in_zar(usd_zar_rate: float) -> Dict[str, float]:
-    """Gold prices properly converted to ZAR"""
-    try:
-        gold = yf.Ticker("GC=F")
-        hist = gold.history(period="90d", interval="1d")
-        
-        if hist.empty:
-            return {"Today": 0.0, "Change": 0.0, "Monthly": 0.0, "YTD": 0.0}
-            
-        current_usd = hist["Close"].iloc[-1]
-        current_zar = current_usd * usd_zar_rate
-        
-        # Previous trading day
-        prev_day = hist["Close"].iloc[-2] if len(hist) > 1 else current_usd
-        prev_day_zar = prev_day * usd_zar_rate
-        
-        # Monthly change
-        month_ago = hist["Close"].iloc[-22] if len(hist) > 21 else current_usd
-        month_ago_zar = month_ago * usd_zar_rate
-        
-        # YTD price
-        ytd_hist = gold.history(start=f"{datetime.now().year}-01-01", interval="1d")
-        ytd_price = ytd_hist["Close"].iloc[0] * usd_zar_rate if not ytd_hist.empty else None
-        
-        return {
-            "Today": round(current_zar, 2),
-            "Change": round(calculate_percentage(prev_day_zar, current_zar), 1),
-            "Monthly": round(calculate_percentage(month_ago_zar, current_zar), 1),
-            "YTD": round(calculate_percentage(ytd_price, current_zar), 1) if ytd_price else 0.0
-        }
-    except Exception as e:
-        print(f"Gold error: {str(e)}")
-        return {"Today": 0.0, "Change": 0.0, "Monthly": 0.0, "YTD": 0.0}
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(delay)
+    return None
 
 def fetch_market_data() -> Optional[Dict[str, Any]]:
     try:
         sa_tz = pytz.timezone("Africa/Johannesburg")
         now = datetime.now(sa_tz)
-        data = {}
-        
-        # 1. Get USD/ZAR rate first
-        usd_zar = yf.Ticker("ZAR=X").history(period="10d")
-        zar_rate = usd_zar["Close"].iloc[-1] if not usd_zar.empty else 0.0
-        
-        # 2. Get all market data
-        data["JSEALSHARE"] = get_jse_data()
-        data["USDZAR"] = {
-            "Today": round(zar_rate, 2),
-            "Change": round(calculate_percentage(usd_zar["Close"].iloc[-2], zar_rate), 1) if len(usd_zar) > 1 else 0.0,
-            "Monthly": 0.0,  # Will be calculated in next version
-            "YTD": 0.0       # Will be calculated in next version
+        today_str = now.strftime('%Y-%m-%d')
+
+        one_day_ago = now - timedelta(days=1)
+        one_month_ago = now - timedelta(days=33)  # 3-day buffer
+        ytd_start = datetime(now.year, 1, 1, tzinfo=sa_tz)
+
+        tickers = {
+            "JSEALSHARE": "^J203.JO",
+            "USDZAR": "USDZAR=X",
+            "EURZAR": "EURZAR=X",
+            "GBPZAR": "GBPZAR=X",
+            "BRENT": "BZ=F",
+            "GOLD": "GC=F",
+            "SP500": "^GSPC"
         }
-        data["GOLD"] = get_gold_in_zar(zar_rate)
-        
-        # 3. Get Bitcoin data
-        try:
-            cg = CoinGeckoAPI()
-            btc_data = cg.get_coin_market_chart_by_id("bitcoin", "zar", days="30")
-            prices = btc_data["prices"]
-            
-            current = prices[-1][1]
-            yesterday = next((p[1] for p in prices if 
-                            (datetime.fromtimestamp(prices[-1][0]/1000) - 
-                             datetime.fromtimestamp(p[0]/1000)).days == 1), prices[-2][1])
-            
-            data["BITCOINZAR"] = {
-                "Today": round(current, 2),
-                "Change": round(calculate_percentage(yesterday, current), 1),
-                "Monthly": round(calculate_percentage(prices[0][1], current), 1),
-                "YTD": 0.0  # Will be calculated in next version
-            }
-        except Exception as e:
-            print(f"Bitcoin error: {str(e)}")
-            data["BITCOINZAR"] = {"Today": 0.0, "Change": 0.0, "Monthly": 0.0, "YTD": 0.0}
-        
+
+        data = {}
+
+        for label, symbol in tickers.items():
+            try:
+                ticker = yf.Ticker(symbol)
+                daily_hist = safe_yfinance_fetch(ticker)
+                if daily_hist is None or daily_hist.empty:
+                    print(f"⚠️ No data for {label} ({symbol})")
+                    continue
+
+                today_val = daily_hist["Close"].iloc[-1]
+                day_ago_val = daily_hist["Close"].iloc[-2] if len(daily_hist) > 1 else today_val
+
+                # --- FIXED JSE HISTORICAL CALCULATION BELOW ---
+                month_ago_val = None
+                ytd_val = None
+
+                if label == "JSEALSHARE":
+                    # Fetch full historical data range in one call
+                    hist = ticker.history(start=one_month_ago.strftime('%Y-%m-%d'), end=today_str)
+
+                    if not hist.empty:
+                        # Find closest value to one month ago
+                        month_ago_val = next(
+                            (v for d, v in hist["Close"].items() if d.date() >= one_month_ago.date()),
+                            None
+                        )
+                        # Find closest YTD value
+                        ytd_val = next(
+                            (v for d, v in hist["Close"].items() if d.date() >= ytd_start.date()),
+                            None
+                        )
+                else:
+                    # Other tickers: original logic
+                    monthly_hist = ticker.history(start=one_month_ago.strftime('%Y-%m-%d'), end=one_day_ago.strftime('%Y-%m-%d'))
+                    month_ago_val = monthly_hist["Close"].iloc[0] if not monthly_hist.empty else None
+
+                    ytd_hist = ticker.history(start=ytd_start.strftime('%Y-%m-%d'))
+                    ytd_val = ytd_hist["Close"].iloc[0] if not ytd_hist.empty else None
+
+                data[label] = {
+                    "Today": float(today_val),
+                    "Change": calculate_percentage(day_ago_val, today_val),
+                    "Monthly": calculate_percentage(month_ago_val, today_val),
+                    "YTD": calculate_percentage(ytd_val, today_val) if ytd_val else 0.0
+                }
+
+            except Exception as e:
+                print(f"⚠️ Error fetching {label}: {str(e)}")
+                continue
+
+        # Add timestamp
         data["timestamp"] = now.strftime("%d %b %Y, %H:%M")
         return data
-        
+
     except Exception as e:
-        print(f"Critical error: {str(e)}")
+        print(f"❌ Critical error in fetch_market_data: {str(e)}")
         return None
