@@ -417,12 +417,59 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
             source = f"Yahoo:{used}"
 
         if _have(df, 1):
-            today = _latest_close(df, now)
-            prev = _prev_trading_close(df, now, days_back=1) or _prev_trading_close(df, now, days_back=2)
-            m_anchor = _last_on_or_before(df, now - timedelta(days=30))
-            y_anchor = _ytd_anchor_value(df, now)
-            data[label] = _row(today, _safe_pct(today, prev), _safe_pct(today, m_anchor), _safe_pct(today, y_anchor))
-            data[label]["_source"] = source
+            # Standard anchors in instrument's native currency
+            today_native = _latest_close(df, now)
+            prev_native = _prev_trading_close(df, now, days_back=1) or _prev_trading_close(df, now, days_back=2)
+            m_anchor_native = _last_on_or_before(df, now - timedelta(days=30))
+            y_anchor_native = _ytd_anchor_value(df, now)
+
+            # --- GOLD: convert USD → ZAR using USDZAR at the corresponding dates ---
+            if label == "GOLD":
+                # Try to fetch USDZAR series for corresponding dates
+                usd_df = _get_from_yahoo("USDZAR=X", start, end)
+                if not _have(usd_df, 1):
+                    # Frankfurter fallback (daily FX)
+                    usd_df = _frankfurter_series("USD", "ZAR", start.date(), end.date())
+
+                def _usd_rate_at(dt: datetime) -> Optional[float]:
+                    if not _have(usd_df, 1):
+                        return None
+                    return _last_on_or_before(usd_df, dt)
+
+                # Rates per anchor; fallback: use today's rate for all if individual dates missing
+                usd_today = _usd_rate_at(now)
+                usd_prev  = _usd_rate_at(now - timedelta(days=1))
+                usd_m     = _usd_rate_at(now - timedelta(days=30))
+                usd_y     = _usd_rate_at(datetime(now.year, 1, 2, 0, 0, tzinfo=SAST))  # around YTD start
+
+                if usd_today is None:
+                    # As a last resort, we can't convert properly. Keep native values.
+                    today = today_native
+                    prev  = prev_native
+                    m_a   = m_anchor_native
+                    y_a   = y_anchor_native
+                else:
+                    # If any historical FX is missing, fall back to today's USDZAR for that anchor
+                    usd_prev = usd_prev if usd_prev is not None else usd_today
+                    usd_m    = usd_m if usd_m is not None else usd_today
+                    usd_y    = usd_y if usd_y is not None else usd_today
+
+                    # Convert each anchor
+                    today = (today_native * usd_today) if today_native is not None else None
+                    prev  = (prev_native  * usd_prev)  if prev_native  is not None else None
+                    m_a   = (m_anchor_native * usd_m)  if m_anchor_native is not None else None
+                    y_a   = (y_anchor_native * usd_y)  if y_anchor_native is not None else None
+                # Write ZAR row for GOLD
+                data[label] = _row(today, _safe_pct(today, prev), _safe_pct(today, m_a), _safe_pct(today, y_a))
+                data[label]["_source"] = source
+            else:
+                # Non-gold instruments unchanged
+                today = today_native
+                prev  = prev_native
+                m_a   = m_anchor_native
+                y_a   = y_anchor_native
+                data[label] = _row(today, _safe_pct(today, prev), _safe_pct(today, m_a), _safe_pct(today, y_a))
+                data[label]["_source"] = source
         else:
             data[label] = _row(None, None, None, None); data[label]["_source"] = "unavailable"
 
