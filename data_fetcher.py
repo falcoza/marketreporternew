@@ -40,21 +40,19 @@ def _as_float(x):
     except Exception:
         return None
 
-def _ensure_df(df: Optional[pd.DataFrame]) -> bool:
+def _count_valid(df: Optional[pd.DataFrame]) -> int:
     try:
-        return (
-            isinstance(df, pd.DataFrame)
-            and "Close" in df.columns
-            and pd.to_numeric(df["Close"], errors="coerce").dropna().shape[0] >= 2
-        )
+        return int(pd.to_numeric(df["Close"], errors="coerce").dropna().shape[0])
     except Exception:
-        return False
+        return 0
+
+def _has_at_least(df: Optional[pd.DataFrame], n: int) -> bool:
+    return isinstance(df, pd.DataFrame) and "Close" in df.columns and _count_valid(df) >= n
 
 def _prepare_df(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
     if df is None or not isinstance(df, pd.DataFrame):
         return df
     try:
-        # Ensure datetime index (UTC), drop dupes, coerce Close numeric
         if "Date" in df.columns:
             df["Date"] = pd.to_datetime(df["Date"], utc=True, errors="coerce")
             df = df.set_index("Date")
@@ -67,7 +65,7 @@ def _prepare_df(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
         return df
 
 def _latest_close(df: pd.DataFrame, now: datetime) -> Optional[float]:
-    """Use last close ON/BEFORE now (protects against 'future' bars)."""
+    """Last close ON/BEFORE now."""
     try:
         for ts in reversed(df.index):
             tloc = ts.tz_convert(SAST) if ts.tzinfo is not None else SAST.localize(ts)
@@ -78,7 +76,7 @@ def _latest_close(df: pd.DataFrame, now: datetime) -> Optional[float]:
         return None
 
 def _prev_trading_close(df: pd.DataFrame, now: datetime, days_back: int = 1) -> Optional[float]:
-    """Close on/before (now - days_back). days_back=1 gives the intended 1D anchor."""
+    """Close on/before (now - days_back)."""
     try:
         target = now - timedelta(days=days_back)
         out = None
@@ -155,7 +153,7 @@ def _yahoo_csv(symbol: str, start: datetime, end: datetime, retries: int = 2) ->
                 continue
             df = pd.read_csv(io.StringIO(r.text))
             df = _prepare_df(df)
-            if _ensure_df(df):
+            if _has_at_least(df, 1):
                 _log(f"Yahoo CSV OK ({symbol})")
                 return df
             _log(f"Yahoo CSV empty ({symbol}) after parse")
@@ -176,7 +174,7 @@ def _yahoo_yf(symbol: str, start: datetime, end: datetime) -> Optional[pd.DataFr
             threads=False,
         )
         df = _prepare_df(df)
-        if _ensure_df(df):
+        if _has_at_least(df, 1):
             _log(f"yfinance OK ({symbol}) window")
             return df
         _log(f"yfinance empty ({symbol}) window")
@@ -188,7 +186,7 @@ def _yahoo_yf(symbol: str, start: datetime, end: datetime) -> Optional[pd.DataFr
             df = yf.download(symbol, period=period, interval="1d",
                              auto_adjust=False, progress=False, threads=False)
             df = _prepare_df(df)
-            if _ensure_df(df):
+            if _has_at_least(df, 1):
                 _log(f"yfinance OK ({symbol}) period={period}")
                 return df
             _log(f"yfinance empty ({symbol}) period={period}")
@@ -199,7 +197,7 @@ def _yahoo_yf(symbol: str, start: datetime, end: datetime) -> Optional[pd.DataFr
 
 def _get_from_yahoo(symbol: str, start: datetime, end: datetime) -> Optional[pd.DataFrame]:
     df = _yahoo_csv(symbol, start, end)
-    if _ensure_df(df):
+    if _has_at_least(df, 1):
         return df
     return _yahoo_yf(symbol, start, end)
 
@@ -215,7 +213,7 @@ def _stooq_csv(symbol: str) -> Optional[pd.DataFrame]:
             return None
         df = pd.read_csv(io.StringIO(r.text))
         df = _prepare_df(df)
-        return df if _ensure_df(df) else None
+        return df if _has_at_least(df, 1) else None
     except Exception as e:
         _log(f"Stooq CSV error ({symbol}): {e}")
         return None
@@ -236,11 +234,11 @@ def _frankfurter_series(base: str, quote: str, start_d: date, end_d: date) -> Op
         for dstr, m in rates.items():
             if quote in m:
                 rows.append((pd.to_datetime(dstr, utc=True), float(m[quote])))
-        if len(rows) < 2:
+        if len(rows) < 1:
             return None
         df = pd.DataFrame(rows, columns=["Date", "Close"]).set_index("Date").sort_index()
         df = _prepare_df(df)
-        return df if _ensure_df(df) else None
+        return df if _has_at_least(df, 1) else None
     except Exception as e:
         _log(f"Frankfurter error {base}{quote}: {e}")
         return None
@@ -257,10 +255,8 @@ def _ft_prev_close_jalsh() -> Optional[float]:
             _log(f"FT JALSH http={r.status_code}")
             return None
         html = r.text
-        # Try common JSON-ish patterns first
         m = re.search(r'"previousClose"\s*:\s*([0-9.,]+)', html)
         if not m:
-            # Fallback: look for the table label
             m = re.search(r'Previous close[^0-9]*([0-9][0-9,.\s]+)</', html, flags=re.I)
         if not m:
             _log("FT JALSH: previous close not found")
@@ -361,46 +357,48 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
     # ---- JSE ALSH (Yahoo; with special 1D guard) ----
     sym = YAHOO["JSEALSHARE"]
     df = _get_from_yahoo(sym, start, end)
-    if _ensure_df(df):
+    if _has_at_least(df, 1):
         today = _latest_close(df, now)
-        prev = _prev_trading_close(df, now, days_back=1)             # 1D anchor: yesterday
+
+        # prev for 1D
+        prev = _prev_trading_close(df, now, days_back=1)
         if prev is None:
-            prev = _prev_trading_close(df, now, days_back=2)         # holiday/weekend next best
-
-        m_anchor = _last_on_or_before(df, now - timedelta(days=30))  # 1M anchor
-        y_anchor = _first_on_or_after(df, now.replace(month=1, day=1))  # YTD anchor
-
+            prev = _prev_trading_close(df, now, days_back=2)
         one_d = _safe_pct(today, prev)
 
-        # Index-specific sanity check & FT backup
+        # sanity check & FT backup
         if one_d is not None and abs(one_d) > 12:
             _log(f"JSE 1D outlier from Yahoo: {one_d:.2f}% (today={today}, prev={prev})")
-            # Try the "two days back" anchor if not already used
-            if prev is not None:
-                prev2 = _prev_trading_close(df, now, days_back=2)
-                alt = _safe_pct(today, prev2)
-                if alt is not None and abs(alt) <= 12:
-                    _log(f"JSE 1D fixed via 2-day back anchor: {alt:.2f}%")
-                    one_d = alt
-                else:
-                    # Pull FT previous close
-                    ft_prev = _ft_prev_close_jalsh()
-                    if ft_prev and ft_prev > 0:
-                        alt2 = _safe_pct(today, ft_prev)
-                        if alt2 is not None and abs(alt2) <= 12:
-                            _log(f"JSE 1D fixed via FT previous close: {alt2:.2f}% (ft_prev={ft_prev})")
-                            one_d = alt2
-                        else:
-                            _log(f"FT prev close didn't resolve outlier (ft_prev={ft_prev}, alt2={alt2})")
+            prev2 = _prev_trading_close(df, now, days_back=2)
+            alt = _safe_pct(today, prev2)
+            if alt is not None and abs(alt) <= 12:
+                _log(f"JSE 1D fixed via 2-day back anchor: {alt:.2f}%")
+                one_d = alt
+            else:
+                ft_prev = _ft_prev_close_jalsh()
+                if ft_prev and ft_prev > 0:
+                    alt2 = _safe_pct(today, ft_prev)
+                    if alt2 is not None and abs(alt2) <= 12:
+                        _log(f"JSE 1D fixed via FT previous close: {alt2:.2f}% (ft_prev={ft_prev})")
+                        one_d = alt2
                     else:
-                        _log("FT prev close unavailable or invalid")
-
-            # If still a wild number, null it out rather than publish nonsense
+                        _log(f"FT prev close didn't resolve outlier (ft_prev={ft_prev}, alt2={alt2})")
+                else:
+                    _log("FT prev close unavailable or invalid")
             if one_d is not None and abs(one_d) > 12:
                 _log("JSE 1D remains implausible; setting Change=None")
                 one_d = None
 
-        data["JSEALSHARE"] = _assemble_row(today, one_d, _safe_pct(today, m_anchor), _safe_pct(today, y_anchor))
+        # 1M / YTD anchors
+        m_anchor = _last_on_or_before(df, now - timedelta(days=30))
+        y_anchor = _first_on_or_after(df, now.replace(month=1, day=1))
+
+        data["JSEALSHARE"] = _assemble_row(
+            today,
+            one_d,
+            _safe_pct(today, m_anchor),
+            _safe_pct(today, y_anchor),
+        )
         data["JSEALSHARE"]["_source"] = f"Yahoo:{sym}"
     else:
         _log("No data for JSEALSHARE after Yahoo CSV+yfinance")
@@ -411,25 +409,21 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
     for fx in ("USDZAR", "EURZAR", "GBPZAR"):
         sym = YAHOO[fx]
         df = _get_from_yahoo(sym, start, end)
-        if not _ensure_df(df):
+        if not _has_at_least(df, 1):
             ff = _frankfurter_series(base=fx[:3], quote="ZAR",
                                      start_d=start.date(), end_d=end.date())
-            if _ensure_df(ff):
+            if _has_at_least(ff, 1):
                 today = _latest_close(ff, now)
-                prev = _prev_trading_close(ff, now, days_back=1)
-                if prev is None:
-                    prev = _prev_trading_close(ff, now, days_back=2)
+                prev = _prev_trading_close(ff, now, days_back=1) or _prev_trading_close(ff, now, days_back=2)
                 m_anchor = _last_on_or_before(ff, now - timedelta(days=30))
                 y_anchor = _first_on_or_after(ff, now.replace(month=1, day=1))
                 data[fx] = _assemble_row(today, _safe_pct(today, prev),
                                          _safe_pct(today, m_anchor), _safe_pct(today, y_anchor))
                 data[fx]["_source"] = "Frankfurter"
                 continue
-        if _ensure_df(df):
+        if _has_at_least(df, 1):
             today = _latest_close(df, now)
-            prev = _prev_trading_close(df, now, days_back=1)
-            if prev is None:
-                prev = _prev_trading_close(df, now, days_back=2)
+            prev = _prev_trading_close(df, now, days_back=1) or _prev_trading_close(df, now, days_back=2)
             m_anchor = _last_on_or_before(df, now - timedelta(days=30))
             y_anchor = _first_on_or_after(df, now.replace(month=1, day=1))
             data[fx] = _assemble_row(today, _safe_pct(today, prev),
@@ -441,30 +435,23 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
             data[fx]["_source"] = "unavailable"
 
     # ---- Brent / Gold / SP500: Yahoo primary, Stooq backup ----
-    YMAP = {"BRENT": "BRENT", "GOLD": "GOLD", "SP500": "SP500"}
-    YSYM = {"BRENT": YAHOO["BRENT"], "GOLD": YAHOO["GOLD"], "SP500": YAHOO["SP500"]}
-    for label in ("BRENT", "GOLD", "SP500"):
-        sym = YSYM[label]
+    for label, sym in (("BRENT","BZ=F"),("GOLD","GC=F"),("SP500","^GSPC")):
         df = _get_from_yahoo(sym, start, end)
-        if not _ensure_df(df):
-            st_sym = STOOQ.get(label)
-            sdf = _stooq_csv(st_sym) if st_sym else None
-            if _ensure_df(sdf):
+        if not _has_at_least(df, 1):
+            st_sym = {"BRENT":"cb.f","GOLD":"gc.f","SP500":"^spx"}[label]
+            sdf = _stooq_csv(st_sym)
+            if _has_at_least(sdf, 1):
                 today = _latest_close(sdf, now)
-                prev = _prev_trading_close(sdf, now, days_back=1)
-                if prev is None:
-                    prev = _prev_trading_close(sdf, now, days_back=2)
+                prev = _prev_trading_close(sdf, now, days_back=1) or _prev_trading_close(sdf, now, days_back=2)
                 m_anchor = _last_on_or_before(sdf, now - timedelta(days=30))
                 y_anchor = _first_on_or_after(sdf, now.replace(month=1, day=1))
                 data[label] = _assemble_row(today, _safe_pct(today, prev),
                                             _safe_pct(today, m_anchor), _safe_pct(today, y_anchor))
                 data[label]["_source"] = f"Stooq:{st_sym}"
                 continue
-        if _ensure_df(df):
+        if _has_at_least(df, 1):
             today = _latest_close(df, now)
-            prev = _prev_trading_close(df, now, days_back=1)
-            if prev is None:
-                prev = _prev_trading_close(df, now, days_back=2)
+            prev = _prev_trading_close(df, now, days_back=1) or _prev_trading_close(df, now, days_back=2)
             m_anchor = _last_on_or_before(df, now - timedelta(days=30))
             y_anchor = _first_on_or_after(df, now.replace(month=1, day=1))
             data[label] = _assemble_row(today, _safe_pct(today, prev),
