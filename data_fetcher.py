@@ -13,12 +13,16 @@ import requests
 import yfinance as yf
 from pycoingecko import CoinGeckoAPI
 
+# Timezone
 SAST = pytz.timezone("Africa/Johannesburg")
 
+# ============== logging ==============
 def _log(msg: str) -> None:
     print(f"[data_fetcher] {msg}")
 
+# ============== helpers: scalars/frames ==============
 def _as_float(x):
+    """Safely coerce a scalar/1-element Series to float (avoids FutureWarnings)."""
     if isinstance(x, (pd.Series, pd.Index)):
         if len(x) == 0:
             return None
@@ -34,19 +38,24 @@ def _as_float(x):
         return None
 
 def _prepare_df(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    """Normalize to Date index (UTC), drop dupes, coerce Close numeric."""
     if df is None or not isinstance(df, pd.DataFrame):
         return df
     try:
-        # normalize possible 'date'/'close'
-        cols = {c.lower(): c for c in df.columns}
-        if "date" in cols and cols["date"] != "Date":
-            df.rename(columns={cols["date"]: "Date"}, inplace=True)
-        if "close" in cols and cols["close"] != "Close":
-            df.rename(columns={cols["close"]: "Close"}, inplace=True)
+        # Normalize headers
+        lower = {c.lower(): c for c in df.columns}
+        if "date" in lower and lower["date"] != "Date":
+            df.rename(columns={lower["date"]: "Date"}, inplace=True)
+        if "close" in lower and lower["close"] != "Close":
+            df.rename(columns={lower["close"]: "Close"}, inplace=True)
 
         if "Date" in df.columns:
             df["Date"] = pd.to_datetime(df["Date"], utc=True, errors="coerce")
             df = df.dropna(subset=["Date"]).set_index("Date")
+
+        if "Close" not in df.columns:
+            return None
+
         df = df.sort_index()
         df = df[~df.index.duplicated(keep="last")]
         df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
@@ -62,6 +71,7 @@ def _have(df: Optional[pd.DataFrame], n:int) -> bool:
         return False
 
 def _latest_close(df: pd.DataFrame, now: datetime) -> Optional[float]:
+    """Last close ON/BEFORE 'now' in SAST."""
     try:
         for ts in reversed(df.index):
             tloc = ts.tz_convert(SAST) if ts.tzinfo is not None else SAST.localize(ts)
@@ -72,6 +82,7 @@ def _latest_close(df: pd.DataFrame, now: datetime) -> Optional[float]:
         return None
 
 def _prev_trading_close(df: pd.DataFrame, now: datetime, days_back:int=1) -> Optional[float]:
+    """Close on/before (now - days_back days) in SAST (trading-day aware)."""
     try:
         target = now - timedelta(days=days_back)
         out = None
@@ -119,7 +130,7 @@ def _safe_pct(new: Optional[float], base: Optional[float]) -> Optional[float]:
 def _row(today: Optional[float], d1: Optional[float], m1: Optional[float], ytd: Optional[float]) -> Dict[str, Optional[float]]:
     return {"Today": today, "Change": d1, "Monthly": m1, "YTD": ytd}
 
-# ----- Yahoo primary (CSV → yfinance) -----
+# ============== Yahoo (CSV first, then yfinance) ==============
 _UAS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
     "Mozilla/5.0 (X11; Linux x86_64)",
@@ -173,10 +184,9 @@ def _get_from_yahoo(symbol: str, start: datetime, end: datetime) -> Optional[pd.
     if _have(df, 1):
         _log(f"Yahoo CSV OK ({symbol})")
         return df
-    df = _yahoo_yf(symbol, start, end)
-    return df
+    return _yahoo_yf(symbol, start, end)
 
-# ----- Stooq & Frankfurter fallbacks (unchanged from working version) -----
+# ============== Backups: Stooq, Frankfurter, FT prev close (for JSE 1D) ==============
 def _stooq_csv_try(symbols: List[str]) -> Optional[pd.DataFrame]:
     for s in symbols:
         try:
@@ -217,27 +227,33 @@ def _frankfurter_series(base: str, quote: str, start_d: date, end_d: date) -> Op
         return None
 
 def _ft_prev_close_jalsh() -> Optional[float]:
+    """FT JALSH:JNB 'Previous close' — backup for JSE 1D when Yahoo looks wrong."""
     try:
         url = "https://markets.ft.com/data/indices/tearsheet/summary?s=JALSH:JNB"
         r = requests.get(url, timeout=15, headers={"User-Agent": random.choice(_UAS)})
         if r.status_code != 200:
+            _log(f"FT JALSH http={r.status_code}")
             return None
         html = r.text
         m = re.search(r'"previousClose"\s*:\s*([0-9.,]+)', html)
         if not m:
             m = re.search(r'Previous close[^0-9]*([0-9][0-9,.\s]+)</', html, flags=re.I)
         if not m:
+            _log("FT JALSH: previous close not found")
             return None
         return float(m.group(1).replace(",", "").strip())
-    except Exception:
+    except Exception as e:
+        _log(f"FT JALSH parse error: {e}")
         return None
 
+# ============== Bitcoin (≤ 365 days) ==============
 def _btc_zar_ytd() -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
     cg = CoinGeckoAPI()
     now = datetime.now(SAST)
     jan1 = date(now.year, 1, 1)
     days = min(365, (now.date() - jan1).days + 2)
 
+    # spot
     spot = None
     for attempt in range(3):
         try:
@@ -248,6 +264,7 @@ def _btc_zar_ytd() -> Tuple[Optional[float], Optional[float], Optional[float], O
             _log(f"CoinGecko spot error {attempt+1}: {e}")
             time.sleep(1 + attempt)
 
+    # history
     prices = None
     for attempt in range(3):
         try:
@@ -291,30 +308,33 @@ def _btc_zar_ytd() -> Tuple[Optional[float], Optional[float], Optional[float], O
         _safe_pct(today_close, ytd_anchor),
     )
 
-# ------------------ YTD anchor helper (new) ------------------
+# ============== YTD anchor (final) ==============
 def _ytd_anchor_value(df: pd.DataFrame, now: datetime) -> Optional[float]:
     """
-    Preferred: last trading close on/before Dec 31 of previous year.
-    Fallback: first trading close on/after Jan 1 of current year.
+    YTD base that matches Yahoo:
+      1) Find the last trading close ON/BEFORE Dec 31 (prior year),
+         walking back up to 10 trading days into December if needed.
+      2) Only if none exist, fall back to first trading close ON/AFTER Jan 1.
     """
-    dec31_prev = datetime(now.year - 1, 12, 31, 23, 59, tzinfo=SAST)
-    jan1_curr = datetime(now.year, 1, 1, 0, 0, tzinfo=SAST)
+    # Step 1: prior-year close (Dec 31 or earlier)
+    for back in range(0, 11):  # 0..10 days back
+        dt = datetime(now.year - 1, 12, 31, 23, 59, tzinfo=SAST) - timedelta(days=back)
+        base = _last_on_or_before(df, dt)
+        if base is not None:
+            return base
+    # Step 2: fallback to first close of this year
+    jan1 = datetime(now.year, 1, 1, 0, 0, tzinfo=SAST)
+    return _first_on_or_after(df, jan1)
 
-    base = _last_on_or_before(df, dec31_prev)
-    if base is not None:
-        return base
-    return _first_on_or_after(df, jan1_curr)
-
-# =========================
-# Public fetch
-# =========================
+# ============== Public: fetch everything ==============
 def fetch_market_data() -> Optional[Dict[str, Any]]:
     now = datetime.now(SAST)
 
-    # start from Dec 15 of previous year so YTD base (Dec 31 close) is always in-range
+    # Start mid-December prior year so the Dec 31 bar is always in range
     start = datetime(now.year - 1, 12, 15, 0, 0, tzinfo=SAST)
     end = now
 
+    # Verified Yahoo symbols / candidates
     YAHOO = {
         "JSEALSHARE": "^J203.JO",
         "USDZAR": "USDZAR=X",
@@ -328,13 +348,14 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
 
     data: Dict[str, Any] = {}
 
-    # ----- JSE (Yahoo) -----
+    # ---- JSE ALSH ----
     jse_df = _get_from_yahoo(YAHOO["JSEALSHARE"], start, end)
     if _have(jse_df, 1):
         today = _latest_close(jse_df, now)
+
+        # 1D: yesterday → try 2d → FT prev close rescue → null if implausible
         prev = _prev_trading_close(jse_df, now, days_back=1) or _prev_trading_close(jse_df, now, days_back=2)
         one_d = _safe_pct(today, prev)
-
         if one_d is not None and abs(one_d) > 12:
             prev2 = _prev_trading_close(jse_df, now, days_back=2)
             alt = _safe_pct(today, prev2)
@@ -343,13 +364,11 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
             else:
                 ft_prev = _ft_prev_close_jalsh()
                 alt2 = _safe_pct(today, ft_prev) if ft_prev else None
-                if alt2 is not None and abs(alt2) <= 12:
-                    one_d = alt2
-                else:
-                    one_d = None
+                one_d = alt2 if (alt2 is not None and abs(alt2) <= 12) else None
 
+        # 1M / YTD
         m_anchor = _last_on_or_before(jse_df, now - timedelta(days=30))
-        y_anchor = _ytd_anchor_value(jse_df, now)  # <-- NEW
+        y_anchor = _ytd_anchor_value(jse_df, now)            # <-- matches Yahoo YTD
 
         data["JSEALSHARE"] = _row(today, one_d, _safe_pct(today, m_anchor), _safe_pct(today, y_anchor))
         data["JSEALSHARE"]["_source"] = "Yahoo:^J203.JO"
@@ -357,7 +376,7 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         data["JSEALSHARE"] = _row(None, None, None, None)
         data["JSEALSHARE"]["_source"] = "unavailable"
 
-    # ----- FX -----
+    # ---- FX: Yahoo → Frankfurter ----
     for fx in ("USDZAR", "EURZAR", "GBPZAR"):
         sym = YAHOO[fx]
         df = _get_from_yahoo(sym, start, end)
@@ -378,7 +397,7 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         data[fx] = _row(today, _safe_pct(today, prev), _safe_pct(today, m_anchor), _safe_pct(today, y_anchor))
         data[fx]["_source"] = source
 
-    # ----- Brent/Gold/SP500 -----
+    # ---- Brent / Gold / SP500: Yahoo multi-symbol → Stooq multi-symbol ----
     def _fetch_multi_yahoo(symbols: List[str]) -> Optional[pd.DataFrame]:
         for s in symbols:
             df = _get_from_yahoo(s, start, end)
@@ -407,19 +426,21 @@ def fetch_market_data() -> Optional[Dict[str, Any]]:
         else:
             data[label] = _row(None, None, None, None); data[label]["_source"] = "unavailable"
 
-    # ----- BTC (unchanged) -----
+    # ---- Bitcoin (ZAR) ----
     btc_today, btc_1d, btc_1m, btc_ytd = _btc_zar_ytd()
     data["BITCOINZAR"] = _row(btc_today, btc_1d, btc_1m, btc_ytd)
     data["BITCOINZAR"]["_source"] = "CoinGecko"
 
-    # meta
+    # ---- meta & diagnostics ----
     data["timestamp"] = now.strftime("%d %b %Y, %H:%M")
     required = ["JSEALSHARE","USDZAR","EURZAR","GBPZAR","BRENT","GOLD","SP500","BITCOINZAR"]
     data["data_status"] = "complete" if all(k in data for k in required) else "partial"
 
+    # optional: log missing anchors (kept — handy in CI logs)
     for k in required:
         row = data.get(k, {})
         for anchor in ("Change","Monthly","YTD"):
             if row.get(anchor) is None:
                 _log(f"Anchor '{anchor}' missing for {k} (source={row.get('_source')})")
+
     return data
