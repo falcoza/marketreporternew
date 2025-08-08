@@ -25,7 +25,6 @@ def _load_font(path_key: str, fallback_size: int) -> ImageFont.FreeTypeFont:
     try:
         return ImageFont.truetype(FONT_PATHS[path_key], fallback_size)
     except Exception:
-        # last-ditch: guess common installed names
         for guess in ("Georgia.ttf", "Times New Roman.ttf", "DejaVuSerif.ttf"):
             try:
                 return ImageFont.truetype(guess, fallback_size)
@@ -36,21 +35,14 @@ def _load_font(path_key: str, fallback_size: int) -> ImageFont.FreeTypeFont:
 def _fmt_today(val: Optional[float]) -> str:
     if val is None:
         return "N/A"
-    try:
-        # If small numbers (FX), keep 2 decimals; else 0 decimals with thousands sep
-        if abs(val) < 100:
-            return f"{val:,.2f}"
-        return f"{val:,.0f}"
-    except Exception:
-        return "N/A"
+    if abs(val) < 100:
+        return f"{val:,.2f}"
+    return f"{val:,.0f}"
 
 def _fmt_pct(val: Optional[float]) -> str:
     if val is None:
         return "—"
-    try:
-        return f"{val:+.1f}%"
-    except Exception:
-        return "—"
+    return f"{val:+.1f}%"
 
 def _cell_color_for_pct(val: Optional[float]) -> tuple:
     if val is None:
@@ -62,7 +54,6 @@ def _cell_color_for_pct(val: Optional[float]) -> tuple:
     return THEME["text"]
 
 def _row_from_dict(row: Dict[str, Any]) -> list:
-    """Convert {'Today':float,'Change':float,'Monthly':float,'YTD':float} -> [Today, 1D, 1M, YTD] as strings."""
     today = _fmt_today(row.get("Today"))
     d1 = _fmt_pct(row.get("Change"))
     m1 = _fmt_pct(row.get("Monthly"))
@@ -73,15 +64,13 @@ def generate_infographic(data: Dict[str, Any], output_path: Optional[str] = None
     """
     Backward-compatible: if output_path is omitted, we auto-name the file.
     Expects data like:
-      data['JSEALSHARE'] = {'Today': 100700.0, 'Change': 0.9, 'Monthly': 3.4, 'YTD': 19.8, ...}
+      data['JSEALSHARE'] = {'Today': 100700.0, 'Change': 0.9, 'Monthly': 3.4, 'YTD': 19.8}
       data['timestamp'] = '08 Aug 2025, 10:35'
     """
-    # -------- output path ----------
     if not output_path:
         ts = datetime.now().strftime("%Y%m%d_%H%M")
         output_path = f"Market_Report_{ts}.png"
 
-    # -------- canvas sizing ----------
     width = 520
     padding = 20
     header_height = 60
@@ -94,34 +83,31 @@ def generate_infographic(data: Dict[str, Any], output_path: Optional[str] = None
     for w in col_widths[:-1]:
         col_x.append(col_x[-1] + w + col_spacing)
 
-    # Only include rows that exist in data
     visible_rows = [k for k in ROW_ORDER if isinstance(data.get(k), dict)]
     height = header_height + (len(visible_rows) * row_height) + footer_height
 
     img = Image.new("RGB", (width, height), THEME["background"])
     draw = ImageDraw.Draw(img)
 
-    # -------- fonts ----------
     font_header   = _load_font("georgia_bold", 20)
     font_row      = _load_font("georgia", 16)
     font_row_bold = _load_font("georgia_bold", 16)
     font_footer   = _load_font("georgia", 12)
 
-    # -------- header ----------
+    # Header
     title = f"Market Report – {datetime.now().strftime('%d %B %Y')}"
     draw.text((padding, padding), title, font=font_header, fill=THEME["header"])
 
-    # If data has a human timestamp, show it under the title (optional)
     ts = data.get("timestamp")
     if isinstance(ts, str):
         draw.text((padding, padding + 26), ts, font=font_row, fill=THEME["text"])
 
-    # -------- table headers ----------
+    # Table headers
     y = header_height - 10
     for i, (col_name, _) in enumerate(REPORT_COLUMNS):
         draw.text((col_x[i], y), col_name, font=font_row_bold, fill=THEME["text"])
 
-    # -------- table rows ----------
+    # Table rows
     y += 30
     for key in visible_rows:
         rowdict = data.get(key, {})
@@ -132,17 +118,22 @@ def generate_infographic(data: Dict[str, Any], output_path: Optional[str] = None
 
         # Today
         draw.text((col_x[1], y), today_s, font=font_row, fill=THEME["text"])
-
         # 1D
-        d1_val = rowdict.get("Change")
-        draw.text((col_x[2], y), d1_s, font=font_row, fill=_cell_color_for_pct(d1_val))
-
+        draw.text((col_x[2], y), d1_s, font=font_row, fill=_cell_color_for_pct(rowdict.get("Change")))
         # 1M
-        m1_val = rowdict.get("Monthly")
-        draw.text((col_x[3], y), m1_s, font=font_row, fill=_cell_color_for_pct(m1_val))
-
+        draw.text((col_x[3], y), m1_s, font=font_row, fill=_cell_color_for_pct(rowdict.get("Monthly")))
         # YTD
-        ytd_val = rowdict.get("YTD")
-        draw.text((col_x[4], y), ytd_s, font=font_row, fill=_cell_color_for_pct(ytd_val))
+        draw.text((col_x[4], y), ytd_s, font=font_row, fill=_cell_color_for_pct(rowdict.get("YTD")))
 
-        y +=
+        y += row_height  # FIXED: this now has a value
+
+    # Footer lines
+    footer_text_1 = "Data sourced from Yahoo Finance, CoinGecko and market feeds"
+    footer_text_2 = "All values shown in Rands"
+    footer_y = height - footer_height + 10
+    draw.text((padding, footer_y), footer_text_1, font=font_footer, fill=THEME["text"])
+    draw.text((padding, footer_y + 15), footer_text_2, font=font_footer, fill=THEME["text"])
+
+    img.save(output_path)
+    print(f"✅ Generated: {output_path}")
+    return output_path
