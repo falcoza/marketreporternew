@@ -1,132 +1,221 @@
-from PIL import Image, ImageDraw, ImageFont
+from __future__ import annotations
+
 from datetime import datetime
-from config import *
+from typing import Dict, Any, Optional
+from PIL import Image, ImageDraw, ImageFont
 
-def generate_infographic(data):
+# Pull theme from config if present; otherwise use safe defaults
+# Try to use your config first; safe defaults otherwise
 try:
-# Load Georgia fonts with fallback
-georgia = ImageFont.truetype(FONT_PATHS['georgia'], 18)
-georgia_bold = ImageFont.truetype(FONT_PATHS['georgia_bold'], 20)
-footer_font = ImageFont.truetype(FONT_PATHS['georgia'], 16)
+from config import THEME as _THEME_CFG, FONT_PATHS as _FONT_PATHS_CFG
+THEME = dict(_THEME_CFG)
+FONT_PATHS = dict(_FONT_PATHS_CFG)
+except Exception:
+THEME = {
+"background": (255, 255, 255),
+"header": (12, 82, 128),
+"text": (29, 29, 27),
+"positive": (22, 145, 61),
+"negative": (200, 30, 35),
+}
+FONT_PATHS = {}
 
-        # Create canvas (reduced height from 550 to 500)
-        img = Image.new("RGB", (520, 500), THEME['background'])
-        # Create canvas (reduced height from 500 to 460)
-        img = Image.new("RGB", (520, 460), THEME['background'])
-draw = ImageDraw.Draw(img)
+# --------- label overrides / row order ----------
+# Display label overrides
+LABEL_OVERRIDES = {
+"JSEALSHARE": "JSE ALL SHARE",
+}
 
-# Header Section
-header_text = f"Market Report {data['timestamp']}"
-header_width = georgia_bold.getlength(header_text)
-draw.text(
-((520 - header_width) // 2, 15),
-header_text,
-font=georgia_bold,
-fill=THEME['text']
-)
-
-# Table Headers
-y_position = 60
-x_position = 25
-for col_name, col_width in REPORT_COLUMNS:
-draw.rectangle(
-[(x_position, y_position), (x_position + col_width, y_position + 30)],
-fill=THEME['header']
-)
-text_width = georgia_bold.getlength(col_name)
-draw.text(
-(x_position + (col_width - text_width) // 2, y_position + 5),
-col_name,
-font=georgia_bold,
-fill="white"
-)
-x_position += col_width
-
-# Data Rows
-y_position = 90
-metrics = [
-("JSE All Share", data["JSEALSHARE"]),
-("USD/ZAR", data["USDZAR"]),
-("EUR/ZAR", data["EURZAR"]),
-("GBP/ZAR", data["GBPZAR"]),
-("Brent Crude", data["BRENT"]),
-("Gold", data["GOLD"]),
-("S&P 500", data["SP500"]),
-("Bitcoin ZAR", data["BITCOINZAR"])
+# Row order in the table
+ROW_ORDER = [
+"JSEALSHARE",
+"USDZAR",
+"EURZAR",
+"GBPZAR",
+"BRENT",
+"GOLD",
+"SP500",
+"BITCOINZAR",
 ]
 
-for idx, (metric_name, values) in enumerate(metrics):
-x_position = 25
-bg_color = "#F5F5F5" if idx % 2 == 0 else THEME['background']
+# --------- font loader with fallbacks ----------
+# ---------- font loader (robust) ----------
+def _load_font(key: str, size: int) -> ImageFont.FreeTypeFont:
+    # 1) try config path
+    path = FONT_PATHS.get(key)
+    if path:
+    # 1) config path
+    p = FONT_PATHS.get(key)
+    if p:
+try:
+            return ImageFont.truetype(path, size)
+            return ImageFont.truetype(p, size)
+except Exception:
+pass
+    # 2) try common system font names (no crash if missing)
+    # 2) common system names
+candidates = [
+        # serif family options first to match your style
+        "DejaVuSerif-Bold.ttf" if "bold" in key else "DejaVuSerif.ttf",
+        "Georgia Bold.ttf" if "bold" in key else "Georgia.ttf",
+        "Times New Roman Bold.ttf" if "bold" in key else "Times New Roman.ttf",
+        # generic DejaVuSans as last-ditch decent fallback
+        "DejaVuSans-Bold.ttf" if "bold" in key else "DejaVuSans.ttf",
+        ("DejaVuSerif-Bold.ttf" if "bold" in key else "DejaVuSerif.ttf"),
+        ("Georgia Bold.ttf" if "bold" in key else "Georgia.ttf"),
+        ("Times New Roman Bold.ttf" if "bold" in key else "Times New Roman.ttf"),
+        ("DejaVuSans-Bold.ttf" if "bold" in key else "DejaVuSans.ttf"),
+]
+for name in candidates:
+try:
+return ImageFont.truetype(name, size)
+except Exception:
+continue
+    # 3) final fallback (never fails)
+    # 3) never fail
+return ImageFont.load_default()
 
-draw.rectangle(
-[(25, y_position), (520 - 25, y_position + 34)],
-fill=bg_color
-)
+# --------- formatting helpers ----------
+def _fmt_today(val: Optional[float]) -> str:
+    if val is None:
+# ---------- formatting ----------
+def _fmt_today(v: Optional[float]) -> str:
+    if v is None:
+return "N/A"
+try:
+        return f"{val:,.2f}" if abs(val) < 100 else f"{val:,.0f}"
+        return f"{v:,.2f}" if abs(v) < 100 else f"{v:,.0f}"
+except Exception:
+return "N/A"
 
-# Metric name
-draw.text(
-(x_position + 5, y_position + 5),
-metric_name,
-font=georgia,
-fill=THEME['text']
-)
-x_position += REPORT_COLUMNS[0][1]
+def _fmt_pct(val: Optional[float]) -> str:
+    if val is None:
+def _fmt_pct(v: Optional[float]) -> str:
+    if v is None:
+return "—"
+try:
+        return f"{val:+.1f}%"
+        return f"{v:+.1f}%"
+except Exception:
+return "—"
 
-# Today’s Value
-today_val = values["Today"]
-today_text = f"{today_val:,.0f}" if today_val > 1000 else f"{today_val:,.2f}"
-draw.text(
-(x_position + 5, y_position + 5),
-today_text,
-font=georgia,
-fill=THEME['text']
-)
-x_position += REPORT_COLUMNS[1][1]
+def _pct_color(val: Optional[float]) -> tuple:
+    if val is None:
+def _pct_color(v: Optional[float]) -> tuple:
+    if v is None:
+return THEME["text"]
+    if val > 0:
+    if v > 0:
+return THEME["positive"]
+    if val < 0:
+    if v < 0:
+return THEME["negative"]
+return THEME["text"]
 
-# Percentage values
-for period in ["Change", "Monthly", "YTD"]:
-value = values[period]
-color = THEME['positive'] if value >= 0 else THEME['negative']
-text = f"{value:+.1f}%"
-text_width = georgia.getlength(text)
-draw.text(
-(x_position + (REPORT_COLUMNS[2][1] - text_width) // 2, y_position + 5),
-text,
-font=georgia,
-fill=color
-)
-x_position += REPORT_COLUMNS[2][1]
+# ---------- drawing helpers ----------
+def _text_w(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont) -> int:
+return int(draw.textlength(text, font=font))
 
-y_position += 34
+def _draw_right(draw: ImageDraw.ImageDraw, x_right: int, y: int, text: str, font, fill):
+draw.text((x_right - _text_w(draw, text, font), y), text, font=font, fill=fill)
 
-        # Disclaimer: All values are in rands (centered)
-        disclaimer_text = "All values are stated in rands"
-        disclaimer_width = footer_font.getlength(disclaimer_text)
-        draw.text(
-            ((520 - disclaimer_width) // 2, y_position + 10),
-            disclaimer_text,
-            font=footer_font,
-            fill="#666666"
-        )
+# --------- main renderer ----------
+# ---------- main ----------
+def generate_infographic(data: Dict[str, Any], output_path: Optional[str] = None) -> str:
+"""
+    Expects `data` like:
+    Renders the report image.
 
-        # Footer (bottom-right aligned)
-        footer_text = "Data: Yahoo Finance, CoinGecko"
-        # Combined disclaimer + data source (centered under last row)
-        footer_text = "All values are stated in rands · Data: Yahoo Finance, CoinGecko"
-footer_width = footer_font.getlength(footer_text)
-draw.text(
-            (520 - footer_width - 15, y_position + 35),
-            ((520 - footer_width) // 2, y_position + 15),
-footer_text,
-font=footer_font,
-fill="#666666"
-)
+    Expects data like:
+     data['JSEALSHARE'] = {'Today': 100700.0, 'Change': 1.1, 'Monthly': 3.6, 'YTD': 19.8}
+      data['timestamp']  = '08 Aug 2025, 12:58'
+    Saves PNG, returns path. If output_path is omitted, a name is auto-generated.
+      data['timestamp']  = '08 Aug 2025, 13:08'
+   """
+    # Canvas
+    # Canvas + vertical layout
+W = 520
+    # Header block enlarged to avoid overlap; footer roomy for 2 lines
+    HEADER_BLOCK_H = 110
+    HEADER_BLOCK_H = 110   # room for title + timestamp
+ROW_H = 40
+FOOTER_H = 60
 
-        # Save infographic
-filename = f"Market_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.png"
-img.save(filename)
-return filename
+rows = [k for k in ROW_ORDER if isinstance(data.get(k), dict)]
+    H = HEADER_BLOCK_H + ROW_H * len(rows) + FOOTER_H
+    H = HEADER_BLOCK_H + len(rows) * ROW_H + FOOTER_H
 
-except Exception as e:
-raise RuntimeError(f"Infographic generation failed: {str(e)}")
+    from PIL import Image
+img = Image.new("RGB", (W, H), THEME["background"])
+draw = ImageDraw.Draw(img)
+
+# Fonts
+FONT_TITLE = _load_font("georgia_bold", 28)
+FONT_SUB   = _load_font("georgia", 16)
+FONT_HEAD  = _load_font("georgia_bold", 18)
+FONT_CELL  = _load_font("georgia", 18)
+FONT_FOOT  = _load_font("georgia", 12)
+
+    # Column positions (with extra space between Metric and Today as requested)
+    X_METRIC = 20
+    X_TODAY_RIGHT = 230  # bumped from 215 → 230 for more breathing room
+    # Column anchors (extra space between Metric and Today)
+    X_METRIC      = 20
+    X_TODAY_RIGHT = 230  # increased for more breathing room
+X_1D_RIGHT    = 310
+X_1M_RIGHT    = 390
+X_YTD_RIGHT   = 470
+
+    # ----- Header (centered) -----
+    # ----- Header -----
+title = "Market Report"
+draw.text(((W - _text_w(draw, title, FONT_TITLE)) // 2, 20), title, font=FONT_TITLE, fill=THEME["header"])
+
+ts = data.get("timestamp")
+if isinstance(ts, str) and ts.strip():
+draw.text(((W - _text_w(draw, ts, FONT_SUB)) // 2, 60), ts, font=FONT_SUB, fill=THEME["text"])
+
+# ----- Table headers -----
+y = 90
+draw.text((X_METRIC, y), "Metric", font=FONT_HEAD, fill=THEME["text"])
+_draw_right(draw, X_TODAY_RIGHT, y, "Today", font=FONT_HEAD, fill=THEME["text"])
+_draw_right(draw, X_1D_RIGHT,    y, "1D",    font=FONT_HEAD, fill=THEME["text"])
+_draw_right(draw, X_1M_RIGHT,    y, "1M",    font=FONT_HEAD, fill=THEME["text"])
+_draw_right(draw, X_YTD_RIGHT,   y, "YTD",   font=FONT_HEAD, fill=THEME["text"])
+y += 28
+
+# ----- Rows -----
+for key in rows:
+        row = data.get(key, {}) or {}
+        row = (data.get(key) or {})
+label = LABEL_OVERRIDES.get(key, key)
+
+today = row.get("Today")
+d1    = row.get("Change")
+m1    = row.get("Monthly")
+ytd   = row.get("YTD")
+
+draw.text((X_METRIC, y), label, font=FONT_CELL, fill=THEME["text"])
+_draw_right(draw, X_TODAY_RIGHT, y, _fmt_today(today), font=FONT_CELL, fill=THEME["text"])
+_draw_right(draw, X_1D_RIGHT,    y, _fmt_pct(d1),      font=FONT_CELL, fill=_pct_color(d1))
+_draw_right(draw, X_1M_RIGHT,    y, _fmt_pct(m1),      font=FONT_CELL, fill=_pct_color(m1))
+_draw_right(draw, X_YTD_RIGHT,   y, _fmt_pct(ytd),     font=FONT_CELL, fill=_pct_color(ytd))
+
+y += ROW_H
+
+    # ----- Footer (two lines, same style) -----
+    # ----- Footer (two lines; case locked) -----
+    # Hard-coded, no transformations applied -> "Rands" will always be capitalized.
+foot1 = "Data sourced from Yahoo Finance, CoinGecko and market feeds"
+foot2 = "All values shown in Rands"
+
+y_foot = H - FOOTER_H + 10
+draw.text((X_METRIC, y_foot),          foot1, font=FONT_FOOT, fill=THEME["text"])
+draw.text((X_METRIC, y_foot + 16),     foot2, font=FONT_FOOT, fill=THEME["text"])
+
+# Save
+if not output_path:
+output_path = f"Market_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.png"
+img.save(output_path)
+print(f"✅ Generated: {output_path}")
+return output_path
