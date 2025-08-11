@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 from PIL import Image, ImageDraw, ImageFont
 
-# ---------------- Config (try/except must be indented) ----------------
+# ---------------- Config ----------------
 try:
     from config import THEME as _THEME_CFG, FONT_PATHS as _FONT_PATHS_CFG
     THEME = dict(_THEME_CFG)
@@ -12,16 +12,23 @@ try:
 except Exception:
     THEME = {
         "background": (255, 255, 255),
-        "header": (12, 82, 128),
-        "text": (29, 29, 27),
-        "positive": (22, 145, 61),
-        "negative": (200, 30, 35),
+        "header": (12, 82, 128),   # blue
+        "text": (29, 29, 27),      # near-black
+        "positive": (22, 145, 61), # green
+        "negative": (200, 30, 35), # red
     }
     FONT_PATHS = {}
 
 # ---------------- Labels / Row order ----------------
 LABEL_OVERRIDES = {
-    "JSEALSHARE": "JSE ALL SHARE",
+    "JSEALSHARE": "JSE All Share",
+    "USDZAR": "USD/ZAR",
+    "EURZAR": "EUR/ZAR",
+    "GBPZAR": "GBP/ZAR",
+    "BRENT": "Brent Crude",
+    "GOLD": "Gold",
+    "SP500": "S&P 500",
+    "BITCOINZAR": "Bitcoin ZAR",
 }
 
 ROW_ORDER = [
@@ -37,18 +44,15 @@ ROW_ORDER = [
 
 # ---------------- Font loader ----------------
 def _load_font(key: str, size: int) -> ImageFont.FreeTypeFont:
-    # 1) config-provided path
     p = FONT_PATHS.get(key)
     if p:
         try:
             return ImageFont.truetype(p, size)
         except Exception:
             pass
-
-    # 2) common system fonts
     candidates = [
-        ("DejaVuSerif-Bold.ttf" if "bold" in key else "DejaVuSerif.ttf"),
         ("Georgia Bold.ttf" if "bold" in key else "Georgia.ttf"),
+        ("DejaVuSerif-Bold.ttf" if "bold" in key else "DejaVuSerif.ttf"),
         ("Times New Roman Bold.ttf" if "bold" in key else "Times New Roman.ttf"),
         ("DejaVuSans-Bold.ttf" if "bold" in key else "DejaVuSans.ttf"),
     ]
@@ -57,8 +61,6 @@ def _load_font(key: str, size: int) -> ImageFont.FreeTypeFont:
             return ImageFont.truetype(name, size)
         except Exception:
             continue
-
-    # 3) never fail
     return ImageFont.load_default()
 
 # ---------------- Formatting helpers ----------------
@@ -81,11 +83,10 @@ def _fmt_pct(v: Optional[float]) -> str:
 def _pct_color(v: Optional[float]) -> tuple:
     if v is None:
         return THEME["text"]
-    if v > 0:
+    # Match sample: +0.0% is green
+    if v >= 0:
         return THEME["positive"]
-    if v < 0:
-        return THEME["negative"]
-    return THEME["text"]
+    return THEME["negative"]
 
 # ---------------- Drawing helpers ----------------
 def _text_w(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont) -> int:
@@ -97,58 +98,54 @@ def _draw_right(draw: ImageDraw.ImageDraw, x_right: int, y: int, text: str, font
 # ---------------- Main renderer ----------------
 def generate_infographic(data: Dict[str, Any], output_path: Optional[str] = None) -> str:
     """
-    Renders the report image.
-
-    Expects:
-      data['<KEY>'] = {'Today': float, 'Change': float, 'Monthly': float, 'YTD': float}
-      data['timestamp'] = '11 Aug 2025, 06:06'
-
-    Saves a PNG and returns its path.
+    Renders the report to a PNG and returns the path.
+    Title line is "Market Report <timestamp>" using data['timestamp'].
     """
     # Canvas + layout
     W = 520
-    HEADER_BLOCK_H = 110
-    ROW_H = 40
-    FOOTER_H = 60
+    TOP_MARGIN = 18
+    TITLE_LINE_H = 36
+    HEADER_BAND_H = 32
+    ROW_H = 36
+    FOOTER_H = 40
 
     rows = [k for k in ROW_ORDER if isinstance(data.get(k), dict)]
-    H = HEADER_BLOCK_H + len(rows) * ROW_H + FOOTER_H
+    H = TOP_MARGIN + TITLE_LINE_H + HEADER_BAND_H + len(rows) * ROW_H + FOOTER_H
 
     img = Image.new("RGB", (W, H), THEME["background"])
     draw = ImageDraw.Draw(img)
 
     # Fonts
-    FONT_TITLE = _load_font("georgia_bold", 28)
-    FONT_SUB   = _load_font("georgia", 16)
-    FONT_HEAD  = _load_font("georgia_bold", 18)
-    FONT_CELL  = _load_font("georgia", 18)
+    FONT_TITLE = _load_font("georgia_bold", 22)
+    FONT_HEAD  = _load_font("georgia_bold", 16)
+    FONT_CELL  = _load_font("georgia", 16)
     FONT_FOOT  = _load_font("georgia", 12)
 
-    # Column anchors
+    # Column anchors (tuned to match your sample)
     X_METRIC      = 20
     X_TODAY_RIGHT = 230
     X_1D_RIGHT    = 310
     X_1M_RIGHT    = 390
     X_YTD_RIGHT   = 470
 
-    # Header
-    title = "Market Report"
-    draw.text(((W - _text_w(draw, title, FONT_TITLE)) // 2, 20), title, font=FONT_TITLE, fill=THEME["header"])
+    # ---- Title (single line) ----
+    ts = data.get("timestamp", "").strip()
+    title = f"Market Report {ts}" if ts else "Market Report"
+    draw.text(((W - _text_w(draw, title, FONT_TITLE)) // 2, TOP_MARGIN), title, font=FONT_TITLE, fill=THEME["text"])
 
-    ts = data.get("timestamp")
-    if isinstance(ts, str) and ts.strip():
-        draw.text(((W - _text_w(draw, ts, FONT_SUB)) // 2, 60), ts, font=FONT_SUB, fill=THEME["text"])
+    # ---- Table header band ----
+    y = TOP_MARGIN + TITLE_LINE_H
+    draw.rectangle([(0, y), (W, y + HEADER_BAND_H)], fill=THEME["header"])
 
-    # Table headers
-    y = 90
-    draw.text((X_METRIC, y), "Metric", font=FONT_HEAD, fill=THEME["text"])
-    _draw_right(draw, X_TODAY_RIGHT, y, "Today", font=FONT_HEAD, fill=THEME["text"])
-    _draw_right(draw, X_1D_RIGHT,    y, "1D",    font=FONT_HEAD, fill=THEME["text"])
-    _draw_right(draw, X_1M_RIGHT,    y, "1M",    font=FONT_HEAD, fill=THEME["text"])
-    _draw_right(draw, X_YTD_RIGHT,   y, "YTD",   font=FONT_HEAD, fill=THEME["text"])
-    y += 28
+    y_text = y + (HEADER_BAND_H - 18) // 2  # vertical centering for ~16–18pt
+    draw.text((X_METRIC, y_text), "Metric", font=FONT_HEAD, fill=(255, 255, 255))
+    _draw_right(draw, X_TODAY_RIGHT, y_text, "Today", font=FONT_HEAD, fill=(255, 255, 255))
+    _draw_right(draw, X_1D_RIGHT,    y_text, "1D%",  font=FONT_HEAD, fill=(255, 255, 255))
+    _draw_right(draw, X_1M_RIGHT,    y_text, "1M%",  font=FONT_HEAD, fill=(255, 255, 255))
+    _draw_right(draw, X_YTD_RIGHT,   y_text, "YTD%", font=FONT_HEAD, fill=(255, 255, 255))
 
-    # Rows
+    # ---- Rows ----
+    y = y + HEADER_BAND_H + 10  # small spacing below band
     for key in rows:
         row = data.get(key) or {}
         label = LABEL_OVERRIDES.get(key, key)
@@ -166,12 +163,9 @@ def generate_infographic(data: Dict[str, Any], output_path: Optional[str] = None
 
         y += ROW_H
 
-    # Footer
-    foot1 = "Data sourced from Yahoo Finance, CoinGecko and market feeds"
-    foot2 = "All values shown in Rands"
-    y_foot = H - FOOTER_H + 10
-    draw.text((X_METRIC, y_foot),      foot1, font=FONT_FOOT, fill=THEME["text"])
-    draw.text((X_METRIC, y_foot + 16), foot2, font=FONT_FOOT, fill=THEME["text"])
+    # ---- Footer (centered) ----
+    foot = "All values are stated in rands · Data: Yahoo Finance, CoinGecko"
+    draw.text(((W - _text_w(draw, foot, FONT_FOOT)) // 2, H - FOOTER_H + 10), foot, font=FONT_FOOT, fill=THEME["text"])
 
     # Save
     if not output_path:
